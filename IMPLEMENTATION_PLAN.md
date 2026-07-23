@@ -12,8 +12,19 @@ injectable `static_handler` (default: a no-op) for the same reason relative
 to `static.py`; `app.py` wires `Router(static_handler=static.serve)` plus
 the two API routes and is what ties everything together for `script/server`.
 
-Next unchecked priority: §8 (end-to-end acceptance test module mirroring all
-13 curl criteria + `running.md`) — the last section.
+Status: all sections (1-8) complete; `./script/test` green (121 tests). Step 1
+is done.
+
+Bug found and fixed while building §8's acceptance suite: `Router._finish`
+was stripping the HEAD body BEFORE `server.py` computed `Content-Length`,
+so HEAD responses got `Content-Length: 0` instead of matching GET (spec
+§5 explicitly requires headers "incl. Content-Length" to be identical).
+Fixed by having `_finish` set an explicit `Content-Length` header from the
+real body length before dropping it, since `serialize_response` only
+auto-fills that header when absent. Caught by
+`test_acceptance_12_head_matches_get_minus_body` — updated the two
+`tests/test_router.py` HEAD tests that had (incorrectly) asserted the old
+zero-Content-Length behavior.
 
 Notes for future iterations:
 - Step 2 (AJAX comment section + SSE/long-polling) is explicitly out of scope
@@ -169,15 +180,19 @@ Notes for future iterations:
 
 ## 8. End-to-end acceptance + docs
 
-- [ ] Acceptance test module mirroring all 13 curl criteria in
+- [x] Acceptance test module mirroring all 13 curl criteria in
       `specs/http-server.md` §Acceptance (using http.client/raw sockets as
       clients), so `./script/test` proves the spec end to end on a fresh
       clone.
-      Verify: `./script/test` green; each criterion is a named test. Note:
-      criterion #9 (connection reuse) is testable without curl via one
-      `http.client.HTTPConnection` issuing two requests, or a raw socket
-      sending two requests and reading two responses.
-- [ ] Write `running.md`: how a grader on a fresh clone starts the server,
+      Done: `tests/test_acceptance.py`, one named test per criterion
+      (#4 and #10/#11 use raw sockets so the request target/line goes over
+      the wire unnormalized; #9 uses one `http.client.HTTPConnection`
+      issuing two requests and checks `conn.sock` identity is unchanged
+      across them to prove reuse rather than reconnect). Also manually
+      verified all 13 against a live `./script/server` run with real
+      `curl` invocations.
+- [x] Write `running.md`: how a grader on a fresh clone starts the server,
       uses the app, and runs the tests.
-      Verify: commands in the doc are the same ones the acceptance tests
-      exercise (manual read-through; scriptable check optional).
+      Done: `running.md` — requirements, `./script/server` (+ `PORT`/`--port`),
+      example `curl` calls for every route, and `./script/test`. Commands
+      match what `tests/test_acceptance.py` exercises.

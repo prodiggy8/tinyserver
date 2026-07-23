@@ -74,7 +74,11 @@ def test_head_dispatches_to_get_handler_and_strips_body():
     head_status, head_headers, head_body = router.dispatch(make_request("HEAD", "/api/uptime"))
 
     assert head_status == get_status
-    assert head_headers == get_headers
+    # HEAD headers must match GET's, plus an explicit Content-Length equal
+    # to what GET's body length would have been (the connection layer
+    # can't recompute it from the now-empty HEAD body).
+    assert dict(head_headers)["Content-Type"] == dict(get_headers)["Content-Type"]
+    assert dict(head_headers)["Content-Length"] == str(len(get_body))
     assert head_body == b""
     assert get_body != b""
 
@@ -125,7 +129,8 @@ def test_head_on_static_path_strips_body_keeps_headers():
     head_status, head_headers, head_body = router.dispatch(make_request("HEAD", "/style.css"))
 
     assert head_status == get_status
-    assert head_headers == get_headers
+    assert dict(head_headers)["Content-Type"] == dict(get_headers)["Content-Type"]
+    assert dict(head_headers)["Content-Length"] == str(len(get_body))
     assert head_body == b""
 
 

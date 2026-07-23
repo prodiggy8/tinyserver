@@ -93,5 +93,13 @@ class Router:
     @staticmethod
     def _finish(method, status, headers, body):
         if method == "HEAD":
+            # Content-Length must match what GET would have sent. Set it
+            # explicitly from the real body now, before the body is
+            # dropped — src/response.py's serialize_response only
+            # auto-fills Content-Length when it's absent, so this survives
+            # to the wire instead of being recomputed as 0.
+            headers = list(headers)
+            if not any(name.lower() == "content-length" for name, _ in headers):
+                headers.append(("Content-Length", str(len(body))))
             body = b""
         return status, headers, body
