@@ -14,8 +14,16 @@ request-line/header parsing, path/query split with hand-rolled
 percent-decoding, Content-Length and chunked body reading, and a
 `BufferedReader` incremental socket reader; 34 unit tests in
 `tests/test_http_parse.py` (plus `tests/conftest.py` adding `src/` to
-`sys.path` for test imports). Next unchecked priority: §3 response
-construction (`src/response.py`).
+`sys.path` for test imports).
+Task 3 (response construction) done 2026-07-22 — `src/response.py`
+implements `serialize_response` (status line + headers + CRLF + body,
+auto-fills `Content-Length`/`Date`/`Server`), a hand-rolled
+`format_http_date` (locale-independent, tested under `de_DE.UTF-8`), an
+`ok_response` helper, and error-page builders for 400/404/405/413/414/431/
+500/505 (`method_not_allowed` also sets `Allow`); 16 unit tests in
+`tests/test_response.py`. Next unchecked priority: §4 connection handling
+(`src/server.py`) — response.py's helpers are what the connection loop will
+call to turn `HttpError`/route results into bytes on the wire.
 
 Note for §4 integration: `read_request_head`/`read_body` raise
 `HttpError(status)` for parse errors and `ConnectionClosed` when the peer
@@ -101,7 +109,7 @@ Notes for future iterations:
 
 ## 3. Response construction (`src/response.py`)
 
-- [ ] Response serialization: status line, headers, CRLF endings, body bytes;
+- [x] Response serialization: status line, headers, CRLF endings, body bytes;
       always sets `Content-Length`, `Date`, and `Server` headers; helpers for
       common statuses (200, 400, 404, 405, 413, 414, 431, 500, 505) with a
       small HTML error page body for errors. `Date` is RFC 7231 IMF-fixdate
@@ -114,6 +122,18 @@ Notes for future iterations:
       `Date` test asserts the RFC 7231 shape (e.g. regex
       `^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$`)
       and passes under a non-English locale.
+      Done: `serialize_response(status, headers, body, version=)` builds the
+      byte stream; `ok_response`/`error_response` plus per-status wrappers
+      (`bad_request`, `not_found`, `method_not_allowed` w/ `Allow`,
+      `content_too_large`, `uri_too_long`, `header_fields_too_large`,
+      `internal_server_error`, `version_not_supported`) cover the spec's
+      status set. `headers` param accepts a dict or list of (name, value)
+      pairs — §5 route handlers should return whichever is convenient;
+      `serialize_response` only fills in Content-Length/Date/Server when the
+      caller hasn't already supplied them, so a route can override e.g.
+      Content-Length for a HEAD response later. 16 unit tests in
+      `tests/test_response.py`, including a `de_DE.UTF-8`-locale run of
+      `format_http_date` (skipped if that locale isn't installed).
 
 ## 4. Connection handling (`src/server.py`)
 
