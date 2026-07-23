@@ -27,12 +27,13 @@ from websocket import OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG, OPCODE_TEXT, encod
 HANDSHAKE_KEY = base64.b64encode(b"0123456789012345").decode("ascii")
 
 
-def make_server(tmp_path, store_path=None, max_connections=128):
+def make_server(tmp_path, store_path=None, max_connections=128, idle_timeout=5.0):
     path = store_path or str(tmp_path / "messages.jsonl")
     store = MessageStore(path=path)
     registry = ConnectionRegistry(max_connections=max_connections)
     router = build_router(store, registry)
-    srv = HttpServer(host="127.0.0.1", port=0, handler=router.dispatch, idle_timeout=5.0)
+    srv = HttpServer(host="127.0.0.1", port=0, handler=router.dispatch,
+                     idle_timeout=idle_timeout)
     port = srv.start()
     return srv, port, path
 
@@ -147,6 +148,33 @@ def test_acceptance_6_welcome_frame_contents(tmp_path):
         assert isinstance(welcome["visitors"], int)
         assert welcome["visitors"] >= 1
         client.close()
+    finally:
+        srv.stop()
+
+
+def test_idle_websocket_survives_past_the_http_idle_timeout(tmp_path):
+    """Regression: the hijacked socket kept the HTTP keep-alive idle
+    timeout (server._handle_connection's sock.settimeout), so read_frame
+    raised socket.timeout — caught by the read loop's `except OSError` —
+    and every idle chat client was dropped after idle_timeout seconds. In
+    production that meant a 5-second disconnect, long before the 60-second
+    ping deadline: the other person in the chat vanished while you typed.
+    Liveness belongs to PingScheduler, so a read timeout must not end the
+    connection."""
+    srv, port, _path = make_server(tmp_path, idle_timeout=0.3)
+    try:
+        a, _welcome_a = connect(port)
+        b, _welcome_b = connect(port)
+        a.read_json()  # b's join
+
+        time.sleep(1.2)  # 4x the idle timeout
+
+        b.post("still here?")
+        relayed = a.read_json()
+        assert relayed["type"] == "message"
+        assert relayed["text"] == "still here?"
+        a.close()
+        b.close()
     finally:
         srv.stop()
 

@@ -35,11 +35,16 @@ class RecordingSocket:
         self.sent = []
         self.closed = False
         self.shutdown_calls = []
+        self.timeout = None
 
     def sendall(self, data):
         if self.closed:
             raise OSError("send on closed socket")
         self.sent.append(data)
+
+    def settimeout(self, value):
+        # serve_connection replaces the inherited HTTP keep-alive timeout.
+        self.timeout = value
 
     def shutdown(self, how):
         self.shutdown_calls.append(how)

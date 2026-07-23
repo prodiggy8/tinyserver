@@ -417,7 +417,8 @@ def handle_message(text, conn, store, registry, rate_limiter):
     registry.broadcast(_message_frame(conn.name, msg_text, ts))
 
 
-def serve_connection(sock, reader, conn, store, registry, rate_limiter=None):
+def serve_connection(sock, reader, conn, store, registry, rate_limiter=None,
+                     read_timeout=DEFAULT_PING_INTERVAL):
     """Run the frame read loop for a hijacked WebSocket connection until
     close/EOF/error, then unregister and close the socket. Runs on the
     thread that performed the hijack (the "reader" thread) — see the
@@ -427,10 +428,20 @@ def serve_connection(sock, reader, conn, store, registry, rate_limiter=None):
         rate_limiter = RateLimiter()
     assembler = FragmentAssembler()
 
+    # The socket arrives carrying the HTTP keep-alive idle timeout (5 s by
+    # default, set in server._handle_connection). A WebSocket may sit idle
+    # far longer than that, so replace it. Liveness is the ping scheduler's
+    # job, not this timeout's: a read that times out just means the peer had
+    # nothing to say, so the loop waits again. PingScheduler.drop() shuts the
+    # socket down, which unblocks this recv for real.
+    sock.settimeout(read_timeout)
+
     try:
         while True:
             try:
                 frame = read_frame(reader)
+            except TimeoutError:
+                continue
             except ProtocolError as exc:
                 conn.enqueue(encode_close(exc.close_code))
                 break
