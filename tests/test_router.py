@@ -1,7 +1,7 @@
 import pytest
 
 from router import Router
-from server import HttpServer, Request
+from server import HIJACKED, HttpServer, Request
 
 
 def make_request(method, path, query="", headers=None, body=b"", version="HTTP/1.1"):
@@ -149,6 +149,17 @@ def test_missing_static_and_no_dynamic_route_is_404():
     status, headers, body = router.dispatch(make_request("GET", "/missing.html"))
 
     assert status == 404
+
+
+# --- Connection hijacking sentinel ---------------------------------------------
+
+def test_dispatch_passes_hijacked_sentinel_through_without_unpacking():
+    router = Router()
+    router.get("/ws", lambda request: HIJACKED)
+
+    result = router.dispatch(make_request("GET", "/ws"))
+
+    assert result is HIJACKED
 
 
 # --- Handler exception safety --------------------------------------------------

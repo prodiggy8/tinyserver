@@ -99,40 +99,27 @@ green). Design notes for consumers in 2.2+:
 - [x] Frame/protocol validation with distinguishable close codes (acceptance #4).
 - [x] Fragmentation reassembly with interleaved control frame (acceptance #5).
 
-### 2.2 Connection hijacking (`src/server.py`, `src/router.py`)
+### 2.2 Connection hijacking (`src/server.py`, `src/router.py`): DONE
 
-- [ ] Give the connection-loop handler a way to take over the raw socket:
-      expose the socket AND the live `BufferedReader` on `Request`
-      (`Request` is defined in `src/server.py:34`), and introduce a sentinel
-      result that `_handle_connection` recognizes to mean "the handler
-      already owns this socket" — skip response serialization/send and
-      return from the loop *without* closing the socket. `Router.dispatch`
-      must check for the sentinel BEFORE `status, headers, body =
-      route_handler(request)` unpacks the result (`src/router.py:74`) and
-      return it unchanged, bypassing `_finish`. Cover with a unit test: a
-      stub handler that hijacks and writes raw bytes directly, asserting the
-      HTTP loop sends nothing extra and does not close the socket out from
-      under the handler.
-      Review note — three things the hijack must hand over, each a real bug
-      if missed:
-      (a) *The existing reader, not a new one.* `_handle_connection` creates
-      one `BufferedReader` per connection (`src/server.py:73`) and it may
-      already hold bytes past the request (`has_buffered_data()`). A browser
-      can send its first WebSocket frame in the same segment as the
-      handshake, so constructing a fresh reader in `chat.py` would silently
-      drop that frame. Pass the same reader through.
-      (b) *Reset the socket timeout.* The loop sets
-      `sock.settimeout(idle_timeout)` (5 s, `src/server.py:76`) for HTTP
-      keep-alive. Inherited unchanged, every idle WebSocket read would raise
-      `socket.timeout` after 5 s. The chat layer must set its own timeout
-      (the pong deadline) immediately after hijacking.
-      (c) *Ownership of closing.* Once hijacked, the HTTP loop must not
-      close the socket; the chat reader thread closes it when its loop ends.
-      Assert this in the unit test.
-- [ ] Add reason phrases for `101 Switching Protocols`, `426 Upgrade
-      Required`, and `503 Service Unavailable` to `response.py`'s
-      `REASON_PHRASES` (needed for the handshake's success/failure paths and
-      the connection-cap rejection in 2.4).
+Implemented. `server.HIJACKED` is a module-level sentinel object; `Request`
+(`src/server.py:34`) now carries `sock` and `reader` (both default `None` so
+existing 6-positional-arg `Request(...)` call sites in tests keep working).
+`_handle_connection` passes the SAME `BufferedReader` it built for the
+connection (not a new one) into `Request.reader`, checks `result is HIJACKED`
+before unpacking the handler's return value, and — when hijacked — returns
+without closing the socket (a `hijacked` flag guards the `finally` block's
+`sock.close()`). `Router.dispatch` (`src/router.py:74`) checks for the
+sentinel before `status, headers, body = route_handler(request)` and returns
+it unchanged, bypassing `_finish`. `router.py` imports `HIJACKED` from
+`server.py`; verified no import cycle (`server.py` only imports `app` lazily
+inside a function body).
+
+Reason phrases for 101/426/503 added to `response.py`'s `REASON_PHRASES`.
+
+Tests: `tests/test_server.py` (`test_hijack_sends_nothing_extra_and_leaves_socket_open_for_handler`,
+`test_hijack_receives_the_same_reader_with_already_buffered_bytes`) and
+`tests/test_router.py` (`test_dispatch_passes_hijacked_sentinel_through_without_unpacking`).
+149/149 green.
 
 ### 2.3 Cookie parsing + Set-Cookie emission
 

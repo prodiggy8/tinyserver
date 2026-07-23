@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from server import HttpServer
+from server import HIJACKED, HttpServer
 
 
 def stub_handler(request):
@@ -233,6 +233,67 @@ def test_handler_exception_returns_500_and_connection_survives():
         send_request(sock, "GET", "/")
         head2, _body2 = recv_response(sock)
         assert head2.startswith(b"HTTP/1.1 500")
+        sock.close()
+    finally:
+        srv.stop()
+
+
+# --- Connection hijacking ------------------------------------------------------
+
+def hijack_handler(request):
+    request.sock.sendall(b"HIJACKED")
+    # Prove the loop handed over ownership rather than just skipping a
+    # response: the handler can still read/write this socket afterward.
+    data = request.sock.recv(5)
+    request.sock.sendall(b"ECHO:" + data)
+    request.sock.close()
+    return HIJACKED
+
+
+def hijack_reader_handler(request):
+    # A browser can pack its first WebSocket frame into the same TCP segment
+    # as the handshake request; that data lands in the HTTP loop's
+    # BufferedReader before the handler ever runs, so the handler must
+    # receive that SAME reader, not a fresh one, or the bytes are lost.
+    extra = request.reader.read_exact(5)
+    request.sock.sendall(b"GOT:" + extra)
+    request.sock.close()
+    return HIJACKED
+
+
+def test_hijack_sends_nothing_extra_and_leaves_socket_open_for_handler():
+    srv = HttpServer(host="127.0.0.1", port=0, handler=hijack_handler, idle_timeout=5.0)
+    port = srv.start()
+    try:
+        sock = connect(port)
+        send_request(sock, "GET", "/ws")
+        sock.settimeout(2.0)
+        # Nothing but the handler's own bytes arrives: no serialized HTTP
+        # response was appended by the connection loop.
+        assert sock.recv(8) == b"HIJACKED"
+
+        # The loop did not close the socket out from under the handler.
+        sock.sendall(b"hello")
+        assert sock.recv(10) == b"ECHO:hello"
+
+        # The handler itself is the one that closes it, once it's done.
+        assert sock.recv(1) == b""
+        sock.close()
+    finally:
+        srv.stop()
+
+
+def test_hijack_receives_the_same_reader_with_already_buffered_bytes():
+    srv = HttpServer(host="127.0.0.1", port=0, handler=hijack_reader_handler, idle_timeout=5.0)
+    port = srv.start()
+    try:
+        sock = connect(port)
+        request_bytes = b"GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"
+        # Send the handshake and extra bytes together so both land in the
+        # BufferedReader's buffer in the same recv().
+        sock.sendall(request_bytes + b"world")
+        sock.settimeout(2.0)
+        assert sock.recv(9) == b"GOT:world"
         sock.close()
     finally:
         srv.stop()

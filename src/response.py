@@ -15,14 +15,17 @@ MONTH_NAMES = [
 ]
 
 REASON_PHRASES = {
+    101: "Switching Protocols",
     200: "OK",
     400: "Bad Request",
     404: "Not Found",
     405: "Method Not Allowed",
     413: "Content Too Large",
     414: "URI Too Long",
+    426: "Upgrade Required",
     431: "Request Header Fields Too Large",
     500: "Internal Server Error",
+    503: "Service Unavailable",
     505: "HTTP Version Not Supported",
 }
 

@@ -14,6 +14,7 @@ wire `Router(static_handler=static.serve)` once it does.
 """
 
 from response import error_page
+from server import HIJACKED
 
 PREFERRED_METHOD_ORDER = ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
 
@@ -71,7 +72,10 @@ class Router:
 
         route_handler = self._routes.get((lookup_method, path))
         if route_handler is not None:
-            status, headers, body = route_handler(request)
+            result = route_handler(request)
+            if result is HIJACKED:
+                return result
+            status, headers, body = result
             return self._finish(method, status, headers, body)
 
         if lookup_method == "GET":

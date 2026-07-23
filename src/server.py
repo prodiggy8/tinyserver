@@ -30,19 +30,31 @@ IDLE_TIMEOUT = 5.0
 # closed after any of these regardless of the client's keep-alive wishes.
 CLOSING_ERROR_STATUSES = {400, 413, 414, 431, 505}
 
+# A handler returns this instead of a (status, headers, body) tuple to take
+# over the raw socket (e.g. a WebSocket upgrade). `Router.dispatch` passes it
+# through unchanged before attempting to unpack a 3-tuple; `_handle_connection`
+# skips response serialization and returns without closing the socket — the
+# handler now owns it (reading, writing, and eventually closing it).
+HIJACKED = object()
+
 
 class Request:
-    """Request object passed to the injected handler."""
+    """Request object passed to the injected handler. `sock` and `reader`
+    (the same BufferedReader the HTTP loop used, which may already hold
+    bytes read past this request) let a handler hijack the connection —
+    see HIJACKED above."""
 
-    __slots__ = ("method", "path", "query", "headers", "body", "version")
+    __slots__ = ("method", "path", "query", "headers", "body", "version", "sock", "reader")
 
-    def __init__(self, method, path, query, headers, body, version):
+    def __init__(self, method, path, query, headers, body, version, sock=None, reader=None):
         self.method = method
         self.path = path
         self.query = query
         self.headers = headers
         self.body = body
         self.version = version
+        self.sock = sock
+        self.reader = reader
 
 
 def _app_handler(request):
@@ -71,6 +83,7 @@ def _send_closing_error(sock, status, version):
 
 def _handle_connection(sock, handler, idle_timeout):
     reader = BufferedReader(sock)
+    hijacked = False
     try:
         while True:
             sock.settimeout(idle_timeout)
@@ -102,9 +115,13 @@ def _handle_connection(sock, handler, idle_timeout):
             keep_alive = _wants_keepalive(version, headers)
             connection_header = ("Connection", "keep-alive" if keep_alive else "close")
 
-            request = Request(method, path, raw_query, headers, body, version)
+            request = Request(method, path, raw_query, headers, body, version, sock, reader)
             try:
-                status, resp_headers, resp_body = handler(request)
+                result = handler(request)
+                if result is HIJACKED:
+                    hijacked = True
+                    return
+                status, resp_headers, resp_body = result
                 pairs = list(resp_headers) if resp_headers else []
                 pairs.append(connection_header)
                 response = serialize_response(status, pairs, resp_body, version=version)
@@ -119,10 +136,11 @@ def _handle_connection(sock, handler, idle_timeout):
             if not keep_alive:
                 return
     finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
+        if not hijacked:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 class HttpServer:
