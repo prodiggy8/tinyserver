@@ -99,3 +99,20 @@ picked up specs/message-wall.md automatically. Plan mode has no completion
 promise, so it always runs to the iteration cap.]
 
 ================================================================================
+
+[STEP 2 / STAGE: REVIEW — interactive prompt to Claude Code]
+
+Review IMPLEMENTATION_PLAN.md's **Step 2** sections against
+specs/message-wall.md. Check that every spec requirement and all 15 acceptance
+criteria are covered and the ordering is buildable (no item depending on a
+subsequent one), that each task is verifiable in pytest and nothing violates
+the no websocket library rule, that the concurrency is sound. Fix problems in
+the plan and summarize findings/changes.
+
+================================================================================
+
+[STEP 2 / STAGE: BUILD — looped via ./loop.sh -m build (model: sonnet).
+PROMPT_build.md unchanged from Step 1 (logged above). Ran to completion,
+producing 7 commits (2.1 through 2.7/2.8).]
+
+================================================================================
