@@ -256,19 +256,42 @@ connection-layer error responses.
 
 ## 6. Static file serving (`src/static.py`)
 
-- [ ] Serve files from `public/` for unmatched GETs; `/` →
+- [x] Serve files from `public/` for unmatched GETs; `/` →
       `public/index.html`; directory path → its `index.html` if present else
       404; missing file → 404 with small HTML error page.
       Verify: unit/integration tests for each case.
-- [ ] MIME table: html, css, js, json, txt, png, jpg/jpeg, gif, svg, ico,
+      Done: `serve(method, path, root=PUBLIC_DIR)` matches
+      `router.py`'s `static_handler` contract exactly — returns
+      `(200, headers, body)` or `None`; `None` means "nothing to serve"
+      (missing file, directory with no `index.html`, or traversal — see
+      below), and `Router` is what turns `None` into the actual 404 (with
+      `error_page`), so static.py never builds an error response itself.
+      `root` is an injectable param (defaults to the real `public/` dir
+      resolved relative to `src/`) so tests use a `tmp_path` fixture instead
+      of depending on the real `public/` contents (which §7 populates).
+      23 unit/integration tests in `tests/test_static.py`, incl. wiring a
+      real `Router(static_handler=...)` against a fake root.
+- [x] MIME table: html, css, js, json, txt, png, jpg/jpeg, gif, svg, ico,
       woff2; unknown → `application/octet-stream`. (Hand-rolled dict — do not
       use `mimetypes` to keep provenance obvious, though it is not forbidden.)
       Verify: unit tests per extension.
-- [ ] Path-traversal protection: resolved path must stay inside `public/`;
+      Done: `MIME_TYPES` dict + `mime_type(path)` helper in `src/static.py`,
+      keyed by lowercased extension; unmapped extensions fall back to
+      `DEFAULT_MIME_TYPE = "application/octet-stream"`.
+- [x] Path-traversal protection: resolved path must stay inside `public/`;
       reject `..`, percent-encoded traversal (`%2e%2e` — note decoding happens
       before routing), absolute paths → 404.
       Verify: tests with `--path-as-is`-style raw targets `/../CLAUDE.md`,
       `/%2e%2e/CLAUDE.md`, `//etc/passwd` (acceptance #4).
+      Done: `_resolve` strips all leading `/` from the (already
+      percent-decoded) path before `os.path.join`-ing it onto `root`, so a
+      request like `//etc/passwd` becomes `root/etc/passwd` (confined, just
+      missing) rather than an absolute filesystem path; `os.path.realpath`
+      then collapses any `..` and the result is rejected with `None` unless
+      it's `root` itself or starts with `root + os.sep`. `%2e%2e` traversal
+      is already turned into literal `..` by `http_parse.percent_decode`
+      before this module ever sees the path, so no extra decoding is needed
+      here (verified in `tests/test_static.py`).
 
 ## 7. Demo app (`src/app.py` + `public/`)
 
