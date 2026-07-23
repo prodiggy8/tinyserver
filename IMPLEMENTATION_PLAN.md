@@ -7,12 +7,9 @@ all `urllib.*` in the guard test (§1); pinned locale-independent `Date`
 construction (§3); made the request handler injectable so §4 can be tested
 before §5 exists (§4 dependency note).
 
-Status: greenfield. Re-verified 2026-07-22 (later pass) by full file listing:
-still **no** `src/`, `tests/`, or `public/` directory and no Python files
-anywhere; an **empty** `script/` directory now exists (harmless — task 1 fills
-it). Spec: `specs/http-server.md` (single spec file; complete for Step 1 — no
-missing specs to author). Tasks are ordered by priority/dependency; each is one
-sitting and verifiable via automated tests run by `./script/test`.
+Status: task 1 (scaffolding) done 2026-07-22 — `src/`, `tests/`, `public/`
+created, `script/test`/`script/server` in place, guard + smoke tests green.
+Next unchecked priority: §2 request parsing (`src/http_parse.py`).
 
 Notes for future iterations:
 - Step 2 (AJAX comment section + SSE/long-polling) is explicitly out of scope
@@ -22,16 +19,24 @@ Notes for future iterations:
   correct option; revisit only if a task below forces it.
 - Tests may use `http.client`/`urllib`/raw sockets as clients; `src/` must
   never import HTTP modules (see CLAUDE.md hard constraints).
+- `pytest` is not available system-wide (pip is externally-managed on this
+  machine). `script/test` auto-provisions a local `.venv` on first run and
+  installs pytest into it — don't assume a bare `pytest` command works;
+  always go through `./script/test`.
 
 ## 1. Scaffolding
 
-- [ ] Create `script/test` (runs pytest over `tests/`, exits nonzero on
+- [x] Create `script/test` (runs pytest over `tests/`, exits nonzero on
       failure) and `script/server` (runs `python3 src/server.py`), both
       executable; create `src/`, `tests/`, `public/` dirs with a trivial
       smoke test so `./script/test` passes on a fresh clone.
       Verify: `./script/test` exits 0; `./script/test` exits nonzero when a
       failing test is present.
-- [ ] Add a guard test that scans `src/*.py` imports and fails if any
+      Done: `script/test` auto-creates a `.venv` (pytest not available
+      system-wide; environment is externally-managed) and runs
+      `pytest tests/`; `script/server` runs `python3 src/server.py "$@"`.
+      Verified exit codes 0/nonzero manually (see commit).
+- [x] Add a guard test that scans `src/*.py` imports and fails if any
       forbidden module is imported: http, http.server, http.client,
       socketserver, wsgiref, and **any** `urllib.*` (not just
       `urllib.request` — `urllib.parse.unquote`/`quote` would hand us
@@ -41,6 +46,11 @@ Notes for future iterations:
       is fine).
       Verify: test passes on clean src; fails if `import http` or
       `from urllib.parse import unquote` is added.
+      Done: `tests/test_no_forbidden_imports.py` — AST-based import scan
+      (catches `import X` and `from X import Y` forms, so `unquote` bare name
+      is also caught since `from urllib.parse import unquote` records module
+      `urllib.parse`) plus a substring scan for `asyncio.start_server`.
+      Manually verified both failure modes trigger a nonzero `./script/test`.
 
 ## 2. Request parsing (`src/http_parse.py` — pure functions, unit-testable without sockets)
 

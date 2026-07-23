@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run the HTTP server. Port via PORT env var or --port flag (default 8080).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+exec python3 src/server.py "$@"
