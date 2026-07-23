@@ -1,11 +1,8 @@
-All prompts given to the AI assistant (Claude Code) for this assignment,
-in chronological order. Looped prompts (PROMPT_plan.md / PROMPT_build.md) are
-recorded once per version at the point the loop was run; the loop feeds the
-same prompt to the agent each iteration via loop.sh.
+# Step 1: HTTP Web Server in Python
 
-================================================================================
+## Stage 1a: Specify
 
-[STEP 1 / STAGE: SPECIFY — interactive prompt to Claude Code]
+Build a specification for the following application:
 
 Build a tiny HTTP/1.1 server in Python from scratch. You're only allowed to
 use raw sockets (no libraries). It must cover: request-line/header/body
@@ -16,15 +13,7 @@ and a demo app (maybe a simple, black and white home page for a CS student at
 CMU). Include concrete acceptance criteria that curl based tests can verify,
 and an explicit out of scope section (no TLS, no HTTP/2).
 
-[follow-up in same session]
-
-instead of websockets can we do support for ajax? so we can build a comment
-section
-
-================================================================================
-
-[STEP 1 / STAGE: PLAN — looped via ./loop.sh -m plan -n 3 (model: sonnet).
-Contents of PROMPT_plan.md, fed to `claude -p` each iteration:]
+## Stage 1b: Plan (looped via ./loop.sh -m plan -n 3 -M sonnet)
 
 0a. Study `specs/*` to learn the application specifications, using parallel subagents where helpful.
 0b. Study @IMPLEMENTATION_PLAN.md (if present) to understand the plan so far.
@@ -36,9 +25,7 @@ IMPORTANT: Plan only. Do NOT implement anything. Do NOT assume functionality is 
 
 ULTIMATE GOAL: An HTTP/1.1 server written in Python using ONLY raw sockets (no http.server, socketserver, http.client, or any HTTP framework/library), serving a small demo web app end to end, exactly as described in `specs/*`. Consider missing elements and plan accordingly. If an element is missing from the specs, search first to confirm it doesn't exist, then if needed author the specification at specs/FILENAME.md and document the plan to implement it in @IMPLEMENTATION_PLAN.md.
 
-================================================================================
-
-[STEP 1 / STAGE: REVIEW — interactive prompt to Claude Code]
+## Stage 1c: Review
 
 Act as a technical/code reviewer of IMPLEMENTATION_PLAN.md against
 specs/http-server.md. Check if 1) every spec requirement and acceptance
@@ -48,11 +35,7 @@ dependency, 3) each task's verification is actually automatable in pytest,
 over-engineered or hacky. Fix any problems directly in IMPLEMENTATION_PLAN.md
 and summarize your findings/changes.
 
-================================================================================
-
-[STEP 1 / STAGE: BUILD — looped via ./loop.sh -m build (model: sonnet).
-Ran to completion in 3 iterations, producing 8 commits. Contents of
-PROMPT_build.md, fed to `claude -p` each iteration:]
+## Stage 1d: Build (looped via ./loop.sh -m build -M sonnet)
 
 0a. Study `specs/*` to learn the application specifications.
 0b. Study @IMPLEMENTATION_PLAN.md.
@@ -73,9 +56,11 @@ Rules:
 - If you find inconsistencies in specs/*, update the specs and note the change in IMPLEMENTATION_PLAN.md.
 - IMPORTANT: once the full implementation is complete, every plan item is checked off, and `./script/test` passes, output `<promise>DONE</promise>`
 
-================================================================================
+# Step 2: WebSockets support
 
-[STEP 2 / STAGE: SPECIFY — interactive prompt to Claude Code]
+## Stage 2a: Specify
+
+Write a specification for the following application:
 
 We now go on to implementing the Step 2 feature: a live chat in the homepage
 built on WebSockets also implemented from scratch from RFC 6455 (no websockets
@@ -91,16 +76,11 @@ and on a slow client, message size and rate limits, and escaping so a message
 containing HTML can't XSS other visitors. Include concrete acceptance criteria
 testable from pytest as well as an out of scope section.
 
-================================================================================
+## Stage 2b: Plan
 
-[STEP 2 / STAGE: PLAN — looped via ./loop.sh -m plan -n 3 (model: sonnet).
-PROMPT_plan.md unchanged from Step 1 (logged above); it reads specs/* so it
-picked up specs/message-wall.md automatically. Plan mode has no completion
-promise, so it always runs to the iteration cap.]
+**Same prompt as Stage 1b, since it reads all of specs/**
 
-================================================================================
-
-[STEP 2 / STAGE: REVIEW — interactive prompt to Claude Code]
+## Stage 2c: Review
 
 Review IMPLEMENTATION_PLAN.md's **Step 2** sections against
 specs/message-wall.md. Check that every spec requirement and all 15 acceptance
@@ -109,10 +89,6 @@ subsequent one), that each task is verifiable in pytest and nothing violates
 the no websocket library rule, that the concurrency is sound. Fix problems in
 the plan and summarize findings/changes.
 
-================================================================================
+## Stage 2d: Buil
 
-[STEP 2 / STAGE: BUILD — looped via ./loop.sh -m build (model: sonnet).
-PROMPT_build.md unchanged from Step 1 (logged above). Ran to completion,
-producing 7 commits (2.1 through 2.7/2.8).]
-
-================================================================================
+**Same prompt as Stage 1d**
