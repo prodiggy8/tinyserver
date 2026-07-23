@@ -134,95 +134,52 @@ max_age=31536000, same_site="Lax")` returns the header value string ready
 to pair with `"Set-Cookie"` in a router handler's headers list. 159/159
 green.
 
-### 2.4 Chat layer (`src/chat.py`)
+### 2.4 Chat layer (`src/chat.py`): DONE
 
-- [ ] Name generation: `<word><word><number>` from small hardcoded word
-      lists plus a 2-digit number (e.g. `quietfalcon42`), matching
-      `^[a-z]+[0-9]{2}$`.
-- [ ] Message store: append-only `data/messages.jsonl` (one JSON object per
-      line: `name`, `text`, `ts`) guarded by a lock covering both the
-      in-memory list and the file append, flushed before the write is
-      acknowledged; on startup, load the last 100 messages, tolerating two
-      distinct cases without crashing: the file not existing yet (fresh
-      clone/first run) and the file existing but its final line being
-      partially written (crash mid-append, so only that last line is
-      skipped, the rest load normally); truncate the file to the last 100
-      lines on startup so it cannot grow unbounded. Create `data/` on
-      startup if it doesn't exist (a fresh clone has no `data/` dir yet —
-      add `data/.gitkeep` too).
-      Review note: add `data/*.jsonl` to `.gitignore`. Without it the store
-      gets committed, a fresh clone starts with whoever's messages were
-      pushed, and acceptance #10 (persistence across restart) passes for the
-      wrong reason.
-- [ ] Per-connection send path: a bounded outbound queue (64 messages) and a
-      dedicated writer thread that drains it and is the only thread writing
-      frames to that socket.
-      Review note: the queue needs a consumer, and the writer thread IS that
-      consumer — this was the plan's central concurrency gap. A write lock
-      alone does not satisfy spec §3's "broadcast never blocks on a single
-      socket": a slow client's `sendall` blocks while holding the lock, so
-      the broadcaster stalls on the very connection the bound was meant to
-      isolate. With a single writer thread per connection, `send()` is just
-      a non-blocking `put` and frame interleaving is impossible by
-      construction (spec §7 satisfied without a lock on the normal path).
-      A `put` onto a full queue drops that connection with close status 1008.
-      Verify: a test whose fake socket blocks on `sendall` — a broadcast to
-      two connections still reaches the healthy one promptly, and the stalled
-      one is dropped with 1008 once its queue fills.
-- [ ] Connection registry: thread-safe add/remove keyed by connection;
-      broadcast takes a snapshot under the lock, releases it, then enqueues
-      (never holds the registry lock across socket I/O or a blocking put);
-      unregister is idempotent — the reader thread, writer thread, and ping
-      scheduler may each try to drop the same connection, and only the first
-      one broadcasts the updated visitor count.
-      Verify: concurrent disconnect during a broadcast leaves the registry
-      consistent; unregistering the same connection twice broadcasts one
-      count update, not two.
-- [ ] Connection cap: refuse the handshake with `503` once 128 connections
-      are registered (checked before committing to the 101 response/hijack
-      in 2.5). The cap must be injectable so the test does not need to open
-      128 sockets.
-      Verify: with the cap set to 2, a third handshake gets `503` and normal
-      HTTP keep-alive is unaffected on that connection. (Spec §6 requirement
-      with no numbered criterion.)
-- [ ] Rate limiting: 5 messages per 10 seconds per connection; over the
-      limit → `{"type":"error","reason":"rate_limited"}`, message not stored
-      or broadcast, connection stays open (acceptance #11).
-- [ ] Length limit: message text > 500 characters after decoding →
-      `{"type":"error","reason":"too_long"}`, not stored; exactly 500
-      succeeds (acceptance #12).
-- [ ] Chat message protocol dispatch: `{"type":"post","text":...}` handling;
-      malformed JSON or an unknown `type` → `{"type":"error",
-      "reason":"bad_request"}`, connection stays open. Server→client push
-      frames per spec §4: `{"type":"message","name":...,"text":...,
-      "ts":...}` on broadcast, `{"type":"visitors","count":...}` on
-      join/leave.
-      Verify: a text frame containing invalid JSON, and one with
-      `{"type":"nonsense"}`, each get a `bad_request` error frame back and
-      the connection stays usable for a subsequent successful post. (Spec §4
-      requirement with no numbered criterion.)
-- [ ] Ping/pong lifecycle: one process-wide scheduler thread pings idle
-      connections every 20 s (by enqueuing, never writing directly); a
-      connection with no pong or other frame for 60 s is dropped;
-      client-initiated pings are answered with a pong carrying the same
-      payload.
-      Review note: the 20 s/60 s intervals MUST be injectable, exactly as
-      Step 1 made the HTTP idle timeout injectable — otherwise this is
-      untestable in pytest without a 60-second sleep.
-      Verify: with intervals shortened to ~0.05 s/0.15 s, a client that
-      never pongs is dropped, and one that does pong survives; a client ping
-      gets a pong with the same payload back. (Spec §3 requirement with no
-      numbered acceptance criterion.)
-- [ ] Close handshake: on receiving a close frame, echo a close frame then
-      close the socket; on server shutdown, send close status 1001 to all
-      registered connections and join the writer threads.
-      Verify: a client sending a close frame receives one back and the
-      socket closes; `HttpServer.stop()` with a connection open delivers a
-      1001 close frame. (Spec §3 requirement with no numbered criterion.)
-- [ ] Abrupt-disconnect handling: a read that raises or returns 0 bytes
-      removes the connection from the registry, closes its socket, and
-      broadcasts an updated visitor count — no traceback reaches the log as
-      an error, and no other connection is affected (acceptance #9).
+Implemented `src/chat.py` + `tests/test_chat.py` (23 tests, all green,
+173/173 for the full suite). `data/.gitkeep` added, `data/*.jsonl` added to
+`.gitignore` (store is never committed).
+
+Threading model as pinned above, realized concretely:
+- `Connection.enqueue` is a non-blocking `queue.Queue(maxsize=64)` put;
+  `Connection.start_writer` is the dedicated writer thread — the only
+  thread that calls `sock.sendall`.
+- `ConnectionRegistry.drop(conn, code, reason)` is the single force-
+  disconnect path (used by a full-queue broadcast, ping timeout, and
+  server shutdown alike): best-effort enqueues a close frame, calls the
+  idempotent `unregister` (returns `True` only for the call that actually
+  removes it, which is also the only call that broadcasts the updated
+  visitor count), and — only on removal — calls `sock.shutdown(SHUT_RDWR)`,
+  never `sock.close()`. Shutting down (not closing) from a non-reader
+  thread is what safely unblocks the reader thread's blocking `recv()`
+  without an fd-reuse race; the reader thread is still the only one that
+  calls `sock.close()`, in `serve_connection`'s `finally` block, matching
+  the pinned invariant exactly.
+- `serve_connection(sock, reader, conn, store, registry, rate_limiter)` is
+  the full per-connection frame loop (2.5's `/ws` handler runs this on the
+  hijacking thread after sending the 101 response, registering, and
+  enqueuing the welcome frame). It owns unregister + writer-thread-join +
+  socket-close in its `finally`, so 2.5's caller doesn't need to.
+  `except OSError: break` around `read_frame` is what makes abrupt
+  disconnect silent (no traceback) per acceptance #9.
+- `PingScheduler(registry, interval, timeout)` — both injectable, per the
+  review note; `.tick()` is exposed separately from `.start()`/`.stop()` so
+  tests can drive it deterministically instead of racing a real thread.
+- `RateLimiter` is a small per-connection sliding-window object (not a
+  method on `Connection`) so `handle_message` can be unit-tested with a
+  plain object exposing just `.name` and `.enqueue`.
+- `MessageStore(path, max_messages)` loads + truncates to last N on
+  construction (tolerating a missing file and a corrupt/partial final line
+  by skipping any line that fails `json.loads`, not just the last one —
+  simpler than special-casing "only the last line" and equally safe), then
+  every `append` does file write + `flush` + `fsync` under the same lock
+  guarding the in-memory list.
+
+Not yet wired to anything: 2.5 (`app.py`) still needs to construct a
+`MessageStore`, `ConnectionRegistry`, and `PingScheduler`, start the ping
+scheduler, and call `serve_connection` from the `/ws` route handler.
+`HttpServer.stop()` (`src/server.py`) doesn't yet call
+`registry.shutdown_all()` — that wiring also belongs to 2.5.
 
 ### 2.5 App wiring (`src/app.py`)
 
@@ -275,10 +232,12 @@ module, which needs 2.1–2.6 in place.
       error case (unmasked/oversized-control/reserved-bit/unknown-opcode/
       oversized-payload/binary/invalid-utf8), and fragmentation with an
       interleaved ping (acceptance #1-5).
-- [ ] `tests/test_chat.py`: unit tests for 2.3/2.4 — name format, cookie
+- [x] `tests/test_chat.py`: unit tests for 2.3/2.4 — name format, cookie
       validation regex, rate limiting, length limit, store truncation/reload
       including both a missing file (first run) and a corrupted/partial
-      final line, and broadcast snapshotting under a concurrent disconnect.
+      final line, broadcast snapshotting under a concurrent disconnect,
+      connection cap, idempotent unregister, queue-full drop, ping
+      timeout/pong survival, close handshake, and abrupt disconnect.
 - [ ] `tests/test_websocket_acceptance.py`: a small raw-socket WebSocket test
       client (send the handshake, encode/decode frames per 2.1) driving a
       real `HttpServer` on an ephemeral port, covering acceptance #6-14:
