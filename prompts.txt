@@ -92,3 +92,10 @@ containing HTML can't XSS other visitors. Include concrete acceptance criteria
 testable from pytest as well as an out of scope section.
 
 ================================================================================
+
+[STEP 2 / STAGE: PLAN — looped via ./loop.sh -m plan -n 3 (model: sonnet).
+PROMPT_plan.md unchanged from Step 1 (logged above); it reads specs/* so it
+picked up specs/message-wall.md automatically. Plan mode has no completion
+promise, so it always runs to the iteration cap.]
+
+================================================================================

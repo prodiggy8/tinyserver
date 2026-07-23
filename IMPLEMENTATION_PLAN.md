@@ -1,198 +1,219 @@
-# IMPLEMENTATION_PLAN.md — Step 1: raw-socket HTTP/1.1 server + demo app
+# IMPLEMENTATION_PLAN.md
 
-Reviewed 2026-07-22 against `specs/http-server.md`. All spec sections §1–6
-and all 13 acceptance criteria map to at least one task below.
+## Step 1 — raw-socket HTTP/1.1 server + demo app: COMPLETE (121/121 green)
 
-Architecture recap (why each module's default is what it is — see each
-section's `Done:` notes for detail): `http_parse.py`/`response.py` are pure
-functions; `server.py`'s `HttpServer` takes its request handler as an
-injectable callable (default: lazily-imported `app.router.dispatch`) so it
-was built/tested before `router.py` existed; `router.py`'s `Router` takes an
-injectable `static_handler` (default: a no-op) for the same reason relative
-to `static.py`; `app.py` wires `Router(static_handler=static.serve)` plus
-the two API routes and is what ties everything together for `script/server`.
+`specs/http-server.md`'s 13 acceptance criteria are green.
 
-Status: all sections (1-8) complete; `./script/test` green (121 tests). Step 1
-is done.
+- [x] Regression fixed 2026-07-23: two "nitpick" commits (`56dd848`,
+      `28eb5f4`) renamed the homepage from the placeholder to "Gustavo
+      Grancieiro" without updating the tests that assert on it, so
+      `tests/test_acceptance.py` (`STUDENT_NAME`) and `tests/test_app.py`
+      failed. Updated both tests to the real name and fixed the stale
+      placeholder still in `public/projects.html`'s `<title>`. The rendered
+      name now lives in exactly three places: the two HTML pages and
+      `STUDENT_NAME` — update all three together if it changes again.
 
-Bug found and fixed while building §8's acceptance suite: `Router._finish`
-was stripping the HEAD body BEFORE `server.py` computed `Content-Length`,
-so HEAD responses got `Content-Length: 0` instead of matching GET (spec
-§5 explicitly requires headers "incl. Content-Length" to be identical).
-Fixed by having `_finish` set an explicit `Content-Length` header from the
-real body length before dropping it, since `serialize_response` only
-auto-fills that header when absent. Caught by
-`test_acceptance_12_head_matches_get_minus_body` — updated the two
-`tests/test_router.py` HEAD tests that had (incorrectly) asserted the old
-zero-Content-Length behavior.
+Architecture: `http_parse.py`/`response.py` are pure functions; `server.py`'s
+`HttpServer` takes an injectable handler (default: lazily-imported
+`app.router.dispatch`); `router.py`'s `Router` takes an injectable
+`static_handler` (default: `static.serve`); `app.py` wires it all together
+for `script/server`. Full historical checklist elided here — see git history
+(`step1: *` commits) if detail is needed; nothing else in this section is
+unchecked.
 
-Notes for future iterations:
-- Step 2 (WebSocket message wall) is explicitly out of scope
-  for Step 1 and has no spec yet — it gets its own specify stage later. Do NOT
-  build it or author its spec as part of this plan.
-- Concurrency choice (spec allows either): thread-per-connection.
-- Tests may use `http.client`/`urllib`/raw sockets as clients; `src/` must
-  never import HTTP modules (see CLAUDE.md hard constraints).
-- `pytest` is not available system-wide (pip is externally-managed on this
-  machine). `script/test` auto-provisions a local `.venv` on first run and
-  installs pytest into it — don't assume a bare `pytest` command works;
-  always go through `./script/test`.
-- `public/index.html`/`projects.html` use the placeholder name "Alex Rivera"
-  (spec: "placeholder text is fine") — the acceptance tests in §8 should
-  assert against that same string.
+Notes still relevant going forward:
+- Concurrency model: thread-per-connection (`server.py`).
+- `pytest` is not available system-wide; always run tests via `./script/test`
+  (auto-provisions `.venv` on first run).
+- `src/` may only import: socket, selectors, threading, struct, hashlib,
+  base64, json, os, sys, pathlib, and other non-HTTP stdlib (CLAUDE.md).
+  `tests/test_no_forbidden_imports.py` globs `src/*.py`, so it automatically
+  covers new Step 2 files with no changes needed.
 
-## 1. Scaffolding
+## Step 2 — live chat over hand-rolled WebSockets: NOT STARTED
 
-- [x] Create `script/test` (runs pytest over `tests/`, exits nonzero on
-      failure) and `script/server` (runs `python3 src/server.py`), both
-      executable; create `src/`, `tests/`, `public/` dirs with a trivial
-      smoke test so `./script/test` passes on a fresh clone.
-      Done: `script/test` auto-creates a `.venv` and runs `pytest tests/`;
-      `script/server` runs `python3 src/server.py "$@"`.
-- [x] Add a guard test that scans `src/*.py` imports and fails if any
-      forbidden module is imported: http, http.server, http.client,
-      socketserver, wsgiref, and **any** `urllib.*`; also fail on the
-      substring `asyncio.start_server` anywhere in src.
-      Done: `tests/test_no_forbidden_imports.py` — AST-based import scan
-      plus a substring scan for `asyncio.start_server`.
+Reviewed 2026-07-23 against `specs/message-wall.md` (authored this session,
+commit `bc68a13`). Confirmed by source search: no `src/websocket.py`, no
+`src/chat.py`, no cookie parsing/`Set-Cookie` emission, no connection-hijack
+path in `server.py`/`router.py`, no `/ws` or `/api/messages` routes, no
+`public/chat.js`, no `data/` directory. Every item below is new work. Ordered
+bottom-up by dependency (pure codec first, then plumbing, then the stateful
+chat layer, then wiring, then UI, then end-to-end tests) — build in this
+order.
 
-## 2. Request parsing (`src/http_parse.py` — pure functions, unit-testable without sockets)
+### 2.1 WebSocket handshake + frame codec (`src/websocket.py` — pure functions, unit-testable without sockets)
 
-- [x] Request-line parsing: `METHOD SP target SP HTTP-version CRLF`; malformed
-      → 400; version `HTTP/1.1`/`HTTP/1.0` accepted, others → 505; request
-      line > 8 KiB → 414.
-- [x] Header parsing: case-insensitive names, up to empty CRLF line; line
-      without a colon → 400; total header block > 32 KiB → 431.
-- [x] Path handling: split off the query string (raw, undecoded) FIRST, then
-      percent-decode only the path (hand-rolled; `urllib.parse` is off-limits
-      per the guard test). Invalid escapes (`%zz`, truncated `%4`) are left
-      literal rather than raising.
-- [x] Content-Length body reading: read exactly N bytes; non-numeric/negative
-      Content-Length → 400; decoded body > 1 MiB → 413.
-- [x] Chunked transfer decoding: hex chunk-size lines (incl. extensions after
-      `;`), chunk data, terminating `0` chunk, ignore trailers; malformed
-      framing → 400; decoded total > 1 MiB → 413.
-- [x] Incremental socket reading helper: buffer-based reader pulling header
-      block/body off a socket-like object across odd-sized `recv()`s.
-      Done: `BufferedReader`, plus orchestration helpers
-      `read_request_head`/`read_body` that apply the 8 KiB/32 KiB/1 MiB
-      limits and raise `HttpError`/`ConnectionClosed` — what `server.py`'s
-      connection loop calls directly. 34 unit tests in
-      `tests/test_http_parse.py`.
+- [ ] `Sec-WebSocket-Accept` computation (SHA-1 of key + GUID
+      `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, base64-encoded). Verify against
+      the RFC 6455 §1.3 worked example: `dGhlIHNhbXBsZSBub25jZQ==` →
+      `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=` (acceptance #1).
+- [ ] Handshake request validation against a parsed `Request`: method must be
+      `GET`; `Upgrade` must contain `websocket` (case-insensitive) else 400;
+      `Connection` must contain `upgrade` (case-insensitive token) else 400;
+      `Sec-WebSocket-Key` must be present and base64-decode to exactly 16
+      bytes else 400; `Sec-WebSocket-Version` must be `13` else `426` (with
+      response header `Sec-WebSocket-Version: 13`). Return either "accept"
+      (with the computed header value) or a `(status, headers, body)`-style
+      rejection so app.py can hand it straight to the router (acceptance #2).
+      Note for 2.5: the success-path `101` response must itself carry all
+      three headers — `Upgrade: websocket`, `Connection: Upgrade`, and
+      `Sec-WebSocket-Accept: <computed>` (spec §1) — not just the accept
+      header alone.
+- [ ] Frame decoding: FIN, RSV1-3, opcode, MASK bit, and all three
+      payload-length forms (7-bit, 7+16-bit, 7+64-bit); unmask client
+      payloads with the 4-byte key. Round-trip encode/decode at payload
+      sizes 0, 125, 126, 65535, 65536 bytes, exercising each length form
+      (acceptance #3).
+- [ ] Frame encoding: unmasked server→client frames, selecting the same
+      three length forms by payload size.
+- [ ] Frame/protocol validation, each distinguishable so `chat.py` can map it
+      to the right close status: unmasked client frame → 1002; a control
+      frame (opcode 0x8/0x9/0xA) with payload > 125 bytes → 1002; a reserved
+      bit set → 1002; an unknown opcode → 1002; payload above the 64 KiB
+      limit (§6) → 1009; opcode 0x2 (binary) → 1003 (text-only app); text
+      payload that is not valid UTF-8 → 1007 (acceptance #4).
+- [ ] Fragmentation reassembly: continuation frames (opcode 0x0) accumulate
+      until a FIN frame completes the message; a control frame may be
+      interleaved between fragments and must be surfaced/handled immediately
+      without disturbing reassembly state; control frames are never
+      fragmented (acceptance #5).
 
-## 3. Response construction (`src/response.py`)
+### 2.2 Connection hijacking (`src/server.py`, `src/router.py`)
 
-- [x] Response serialization: status line, headers, CRLF endings, body bytes;
-      always sets `Content-Length`/`Date`/`Server`; helpers for common
-      statuses (200, 400, 404, 405, 413, 414, 431, 500, 505) with a small
-      HTML error page body for errors. `Date` is a hand-rolled RFC 7231
-      IMF-fixdate from `time.gmtime()` with hardcoded English day/month names
-      (locale-independent — do NOT use `strftime`/`email.utils.formatdate`).
-      Done: `serialize_response(status, headers, body, version=)`;
-      `ok_response`/`error_response` plus per-status wrappers
-      (`method_not_allowed` sets `Allow`); `error_page(status, detail=None)`
-      is public so other modules (`router.py`) can reuse the same HTML
-      template for tuple-style `(status, headers, body)` results instead of
-      fully-serialized bytes. `headers` accepts a dict or list of pairs. 16
-      unit tests in `tests/test_response.py` (incl. a `de_DE.UTF-8`-locale
-      run of `format_http_date`).
+- [ ] Give the connection-loop handler a way to take over the raw socket:
+      add the socket to `Request` (or pass it alongside), and introduce a
+      sentinel result that `_handle_connection` recognizes to mean "the
+      handler already owns this socket" — skip response serialization/send
+      and return from the loop *without* closing the socket. `Router.dispatch`
+      must pass the sentinel through unchanged (bypass the HEAD/
+      Content-Length finishing in `_finish`, since there is no status/body to
+      process). Cover with a unit test: a stub handler that hijacks and
+      writes raw bytes directly, asserting the HTTP loop sends nothing extra
+      and does not close the socket out from under the handler.
+- [ ] Add reason phrases for `101 Switching Protocols`, `426 Upgrade
+      Required`, and `503 Service Unavailable` to `response.py`'s
+      `REASON_PHRASES` (needed for the handshake's success/failure paths and
+      the connection-cap rejection in 2.4).
 
-## 4. Connection handling (`src/server.py`)
+### 2.3 Cookie parsing + Set-Cookie emission
 
-- [x] Socket listener: bind `127.0.0.1:8080` by default; port from `PORT` env
-      var or `--port` flag (flag wins); `SO_REUSEADDR`; thread-per-connection
-      dispatch; clean shutdown on KeyboardInterrupt/closing the listen socket.
-      Handler and idle timeout are injectable; port-0 binds expose the bound
-      port via `.port` for tests.
-- [x] Keep-alive semantics: HTTP/1.1 keep-alive by default, close on
-      `Connection: close`; HTTP/1.0 close by default, keep alive on
-      `Connection: keep-alive`; multiple sequential requests over one
-      connection.
-- [x] Idle timeout: 5 s on keep-alive connections (injectable), close
-      silently via `socket.timeout`.
-- [x] Error responses at the connection layer: `HttpError` → matching
-      400/413/414/431/505 response, then close (`CLOSING_ERROR_STATUSES`).
-      Done: `HttpServer` (bind/start/serve_forever/stop) +
-      `_handle_connection`. Handler contract: callable taking a `Request`
-      (method/path/query/headers/body/version) and returning
-      `(status, headers, body)` — the server appends the `Connection` header
-      itself, so handlers must NOT set one; HEAD-stripping and static
-      404-fallback are entirely the router/static layer's job. Handler
-      exceptions → 500, connection stays alive. 10 integration tests in
-      `tests/test_server.py` (raw sockets + stub/raising handlers).
+- [ ] Parse the `Cookie` request header into a name→value dict (hand-rolled
+      split on `; ` / `=`, no library) — expose via a small helper reusable
+      by both the `/` route (2.5) and the `/ws` handshake (2.4/2.5).
+- [ ] Helper to build a `Set-Cookie: chatname=<name>; Path=/;
+      Max-Age=31536000; SameSite=Lax` header value.
+- [ ] Cookie validation: a `chatname` cookie value must match
+      `^[a-z]+[0-9]{2}$` and be ≤ 32 chars, else treat as absent and issue a
+      fresh name (acceptance #13).
 
-## 5. Routing layer (`src/router.py`)
+### 2.4 Chat layer (`src/chat.py`)
 
-- [x] Route registry keyed by `(method, exact path)`; handler receives a
-      `Request` and returns `(status, headers, body)`; dynamic routes take
-      precedence over static files.
-- [x] Method handling: `HEAD` dispatches to the `GET` handler (or static
-      fallback) and strips the body, keeping status/headers identical to
-      GET; a path that's "known" via another dynamic method OR a static file
-      → 405 with `Allow` (e.g. `POST /style.css` → `405 Allow: GET, HEAD`,
-      ordered via `PREFERRED_METHOD_ORDER`); otherwise 404.
-- [x] Handler exception safety: `Router.dispatch` does NOT catch handler
-      exceptions — they propagate to `server.py`'s existing 500 handling, so
-      no extra code was needed here; verified with a real
-      `Router`+`HttpServer` integration test.
-      Done: `Router` — `add_route`/`get`/`post`, `dispatch(request)` matches
-      `HttpServer`'s handler contract exactly (`HttpServer(handler=router.dispatch)`
-      wires directly). `static_handler` is `callable(method, path) ->
-      (status, headers, body) | None`, always called with `method="GET"`,
-      at most once per request. 13 tests in `tests/test_router.py`.
+- [ ] Name generation: `<word><word><number>` from small hardcoded word
+      lists plus a 2-digit number (e.g. `quietfalcon42`), matching
+      `^[a-z]+[0-9]{2}$`.
+- [ ] Message store: append-only `data/messages.jsonl` (one JSON object per
+      line: `name`, `text`, `ts`) guarded by a lock covering both the
+      in-memory list and the file append, flushed before the write is
+      acknowledged; on startup, load the last 100 messages, tolerating two
+      distinct cases without crashing: the file not existing yet (fresh
+      clone/first run) and the file existing but its final line being
+      partially written (crash mid-append, so only that last line is
+      skipped, the rest load normally); truncate the file to the last 100
+      lines on startup so it cannot grow unbounded. Create `data/` on
+      startup if it doesn't exist (a fresh clone has no `data/` dir yet —
+      add `data/.gitkeep` too).
+- [ ] Connection registry: thread-safe add/remove keyed by connection;
+      broadcast iterates a snapshot (so a disconnect mid-broadcast can't
+      corrupt iteration); each connection has its own write lock (frames
+      from concurrent broadcasts must not interleave on one socket) and a
+      bounded outbound queue (64 messages) — a full queue drops that
+      connection with close status 1008 rather than blocking the
+      broadcaster.
+- [ ] Connection cap: refuse the handshake with `503` once 128 connections
+      are registered (checked before committing to the 101 response/hijack
+      in 2.5).
+- [ ] Rate limiting: 5 messages per 10 seconds per connection; over the
+      limit → `{"type":"error","reason":"rate_limited"}`, message not stored
+      or broadcast, connection stays open (acceptance #11).
+- [ ] Length limit: message text > 500 characters after decoding →
+      `{"type":"error","reason":"too_long"}`, not stored; exactly 500
+      succeeds (acceptance #12).
+- [ ] Chat message protocol dispatch: `{"type":"post","text":...}` handling;
+      malformed JSON or an unknown `type` → `{"type":"error",
+      "reason":"bad_request"}`, connection stays open. Server→client push
+      frames per spec §4: `{"type":"message","name":...,"text":...,
+      "ts":...}` on broadcast, `{"type":"visitors","count":...}` on
+      join/leave.
+- [ ] Ping/pong lifecycle: a background scheduler pings idle connections
+      every 20s; a connection with no pong (or any frame) for 60s is
+      dropped; client-initiated pings are answered with a pong carrying the
+      same payload.
+- [ ] Close handshake: on receiving a close frame, echo a close frame then
+      close the socket; on server shutdown, send close status 1001 to all
+      registered connections.
+- [ ] Abrupt-disconnect handling: a read that raises or returns 0 bytes
+      removes the connection from the registry, closes its socket, and
+      broadcasts an updated visitor count — no traceback reaches the log as
+      an error, and no other connection is affected (acceptance #9).
 
-## 6. Static file serving (`src/static.py`)
+### 2.5 App wiring (`src/app.py`)
 
-- [x] Serve files from `public/` for unmatched GETs; `/` →
-      `public/index.html`; directory path → its `index.html` if present else
-      404 (via `None`); missing file → `None` (`Router` turns this into 404).
-- [x] MIME table: html, css, js, json, txt, png, jpg/jpeg, gif, svg, ico,
-      woff2 (hand-rolled dict, not `mimetypes`); unknown →
-      `application/octet-stream`.
-- [x] Path-traversal protection: resolved path must stay inside `root`.
-      Done: `serve(method, path, root=PUBLIC_DIR)` matches `Router`'s
-      `static_handler` contract exactly. `_resolve` strips leading `/` from
-      the (already percent-decoded) path before joining onto `root`, then
-      `os.path.realpath`s the result and rejects anything that isn't `root`
-      itself or under `root + os.sep` — this catches `..`, already-decoded
-      `%2e%2e`, and confines `//etc/passwd`-style targets to
-      `root/etc/passwd` rather than escaping. `root` is an injectable param
-      so tests use a `tmp_path` fixture. 23 tests in `tests/test_static.py`.
+- [ ] Register `GET /ws`: runs 2.1's handshake validation (reading the
+      `chatname` cookie per 2.3, checking 2.4's connection cap) — on success,
+      sends the 101 response directly on the socket and hijacks the
+      connection into `chat.py`'s registry, which immediately sends the
+      `welcome` frame (`name`, recent `messages`, `visitors` count); on
+      failure, returns the normal `(400/426/503, headers, body)` tuple
+      through the router so HTTP keep-alive semantics are untouched.
+- [ ] Register `GET /api/messages`: returns the same recent messages as
+      JSON with `Content-Type: application/json` and
+      `X-Content-Type-Options: nosniff`.
+- [ ] `GET /` gains `Set-Cookie` issuance when the request has no valid
+      `chatname` cookie (2.3) — needs a dynamic route (or a thin wrapper
+      around `static.serve`) since the current `/` response comes from the
+      static-file layer, which has no cookie awareness.
 
-## 7. Demo app (`src/app.py` + `public/`)
+### 2.6 Chat UI (`public/`)
 
-- [x] Static site: black-and-white `public/index.html` (name, bio, courses,
-      projects link), `public/style.css`, `public/projects.html` linked from
-      home; no colors, no images.
-- [x] `GET /api/uptime` → 200 `application/json` `{"uptime_seconds": <float>}`
-      measured from server start (`app.START_TIME`).
-- [x] `POST /api/echo` → 200 JSON `{"length": <int>, "body": "<text>"}` for
-      both Content-Length and chunked request bodies (`length` is the byte
-      length of the raw body).
-      Done: `src/app.py` builds `router = Router(static_handler=static.serve)`
-      and registers `GET /api/uptime`, `POST /api/echo`; `server.py`'s
-      `HttpServer` now defaults its handler to `app.router.dispatch`
-      (lazily imported) instead of a 404 stub. 8 integration tests in
-      `tests/test_app.py` covering the static site, uptime, and echo
-      (Content-Length + chunked) over a real `HttpServer`. Manually verified
-      with `curl` against a live run, incl. `/../CLAUDE.md` and
-      `/%2e%2e/CLAUDE.md` → 404.
+- [ ] `public/chat.js`: opens the `/ws` connection, renders `welcome`/
+      `message`/`visitors`/`error` frames, sends `post` frames from a form.
+      Renders all user-supplied text via `textContent`, never `innerHTML`
+      (acceptance #14 includes a source-check for the absence of
+      `innerHTML`).
+- [ ] `public/index.html` + `style.css`: add a chat section (message list,
+      post input, live visitor count) consistent with the existing
+      black-and-white design; load `chat.js`.
 
-## 8. End-to-end acceptance + docs
+### 2.7 Tests
 
-- [x] Acceptance test module mirroring all 13 curl criteria in
-      `specs/http-server.md` §Acceptance (using http.client/raw sockets as
-      clients), so `./script/test` proves the spec end to end on a fresh
-      clone.
-      Done: `tests/test_acceptance.py`, one named test per criterion
-      (#4 and #10/#11 use raw sockets so the request target/line goes over
-      the wire unnormalized; #9 uses one `http.client.HTTPConnection`
-      issuing two requests and checks `conn.sock` identity is unchanged
-      across them to prove reuse rather than reconnect). Also manually
-      verified all 13 against a live `./script/server` run with real
-      `curl` invocations.
-- [x] Write `running.md`: how a grader on a fresh clone starts the server,
-      uses the app, and runs the tests.
-      Done: `running.md` — requirements, `./script/server` (+ `PORT`/`--port`),
-      example `curl` calls for every route, and `./script/test`. Commands
-      match what `tests/test_acceptance.py` exercises.
+- [ ] `tests/test_websocket.py`: unit tests for all of 2.1 — accept-header
+      worked example, each handshake rejection case (400s + 426 with the
+      version header), frame round-trips at all 5 sizes, each close-code
+      error case (unmasked/oversized-control/reserved-bit/unknown-opcode/
+      oversized-payload/binary/invalid-utf8), and fragmentation with an
+      interleaved ping (acceptance #1-5).
+- [ ] `tests/test_chat.py`: unit tests for 2.3/2.4 — name format, cookie
+      validation regex, rate limiting, length limit, store truncation/reload
+      including both a missing file (first run) and a corrupted/partial
+      final line, and broadcast snapshotting under a concurrent disconnect.
+- [ ] `tests/test_websocket_acceptance.py`: a small raw-socket WebSocket test
+      client (send the handshake, encode/decode frames per 2.1) driving a
+      real `HttpServer` on an ephemeral port, covering acceptance #6-14:
+      welcome frame contents, two-client message relay within 1s, visitor
+      count on join/leave, abrupt disconnect resilience (server keeps
+      serving plain HTTP), persistence across a server stop/restart, rate
+      limit on a 6th rapid post, 500 vs. 501-char length limit, cookie
+      round-trip name persistence, and (#14's data half) a posted message
+      containing `<script>alert(1)</script>` round-trips as literal text
+      through the store and `GET /api/messages` (no server-side escaping/
+      stripping — JSON encoding already makes this safe; the client-side
+      half of #14, the `innerHTML`-absence source check, lives in 2.6).
+- [ ] Re-run the full Step 1 suite plus the forbidden-import guard alongside
+      the new tests to confirm acceptance #15 (nothing in Step 1 breaks; the
+      guard test passes with `src/websocket.py`/`src/chat.py` present).
+
+### 2.8 Docs
+
+- [ ] Update `running.md`: how to use the chat UI, and that
+      `data/messages.jsonl` is where messages persist (and survives
+      restarts).

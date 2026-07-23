@@ -13,7 +13,7 @@ import pytest
 
 from server import HttpServer
 
-STUDENT_NAME = "Alex Rivera"
+STUDENT_NAME = "Gustavo Grancieiro"
 
 
 @pytest.fixture(scope="module")

@@ -53,7 +53,7 @@ def test_home_page_is_html_with_student_name(running_server):
     head, body = recv_response(sock)
     assert head.startswith(b"HTTP/1.1 200")
     assert b"text/html" in head
-    assert b"Alex Rivera" in body
+    assert b"Gustavo Grancieiro" in body
     sock.close()
 
 
@@ -63,7 +63,7 @@ def test_projects_page_is_html_with_student_name(running_server):
     head, body = recv_response(sock)
     assert head.startswith(b"HTTP/1.1 200")
     assert b"text/html" in head
-    assert b"Alex Rivera" in body
+    assert b"Gustavo Grancieiro" in body
     sock.close()
 
 
