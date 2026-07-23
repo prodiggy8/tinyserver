@@ -74,3 +74,21 @@ Rules:
 - IMPORTANT: once the full implementation is complete, every plan item is checked off, and `./script/test` passes, output `<promise>DONE</promise>`
 
 ================================================================================
+
+[STEP 2 / STAGE: SPECIFY — interactive prompt to Claude Code]
+
+We now go on to implementing the Step 2 feature: a live chat in the homepage
+built on WebSockets also implemented from scratch from RFC 6455 (no websockets
+libraries, same constraints as Step 1). Visitors see recent messages on page
+load, post new ones, and see others' messages arrive live without a reload
+(async). Messages persist to disk so they survive a server restart and the
+page is useful when nobody else is online. Show a live count of connected
+visitors. Users are anonymous, make a random <word><word><number> combination
+for each user (persistance). Cover: the Upgrade handshake and what makes it
+fail, frame parsing inclding client masking ahd the payload length forms,
+thread safe broadcast to many connections, what happens on abrupt disconnect
+and on a slow client, message size and rate limits, and escaping so a message
+containing HTML can't XSS other visitors. Include concrete acceptance criteria
+testable from pytest as well as an out of scope section.
+
+================================================================================
