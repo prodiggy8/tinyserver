@@ -67,42 +67,37 @@ unregistering is idempotent (reader, writer, and ping scheduler can all
 decide to drop the same connection) and only the first unregister broadcasts
 the updated visitor count.
 
-### 2.1 WebSocket handshake + frame codec (`src/websocket.py` — pure functions, unit-testable without sockets)
+### 2.1 WebSocket handshake + frame codec (`src/websocket.py` — pure functions, unit-testable without sockets): DONE
 
-- [ ] `Sec-WebSocket-Accept` computation (SHA-1 of key + GUID
-      `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, base64-encoded). Verify against
-      the RFC 6455 §1.3 worked example: `dGhlIHNhbXBsZSBub25jZQ==` →
-      `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=` (acceptance #1).
-- [ ] Handshake request validation against a parsed `Request`: method must be
-      `GET`; `Upgrade` must contain `websocket` (case-insensitive) else 400;
-      `Connection` must contain `upgrade` (case-insensitive token) else 400;
-      `Sec-WebSocket-Key` must be present and base64-decode to exactly 16
-      bytes else 400; `Sec-WebSocket-Version` must be `13` else `426` (with
-      response header `Sec-WebSocket-Version: 13`). Return either "accept"
-      (with the computed header value) or a `(status, headers, body)`-style
-      rejection so app.py can hand it straight to the router (acceptance #2).
-      Note for 2.5: the success-path `101` response must itself carry all
-      three headers — `Upgrade: websocket`, `Connection: Upgrade`, and
-      `Sec-WebSocket-Accept: <computed>` (spec §1) — not just the accept
-      header alone.
-- [ ] Frame decoding: FIN, RSV1-3, opcode, MASK bit, and all three
-      payload-length forms (7-bit, 7+16-bit, 7+64-bit); unmask client
-      payloads with the 4-byte key. Round-trip encode/decode at payload
-      sizes 0, 125, 126, 65535, 65536 bytes, exercising each length form
-      (acceptance #3).
-- [ ] Frame encoding: unmasked server→client frames, selecting the same
-      three length forms by payload size.
-- [ ] Frame/protocol validation, each distinguishable so `chat.py` can map it
-      to the right close status: unmasked client frame → 1002; a control
-      frame (opcode 0x8/0x9/0xA) with payload > 125 bytes → 1002; a reserved
-      bit set → 1002; an unknown opcode → 1002; payload above the 64 KiB
-      limit (§6) → 1009; opcode 0x2 (binary) → 1003 (text-only app); text
-      payload that is not valid UTF-8 → 1007 (acceptance #4).
-- [ ] Fragmentation reassembly: continuation frames (opcode 0x0) accumulate
-      until a FIN frame completes the message; a control frame may be
-      interleaved between fragments and must be surfaced/handled immediately
-      without disturbing reassembly state; control frames are never
-      fragmented (acceptance #5).
+Implemented `src/websocket.py` and `tests/test_websocket.py` (25 tests, all
+green). Design notes for consumers in 2.2+:
+
+- `validate_handshake(request)` returns the computed accept value on
+  success; raises `HandshakeError(status, headers)` on failure (400 or 426
+  with `Sec-WebSocket-Version: 13`) — 2.5's `/ws` handler catches this and
+  builds the `(status, headers, body)` tuple for the router.
+- `read_frame(reader)` takes anything with `read_exact(n)`
+  (`http_parse.BufferedReader` qualifies) — returns a `Frame` or `None` on
+  EOF, raises `ProtocolError(close_code)` for structural violations
+  (unmasked/reserved-bit/unknown-opcode → 1002, oversized control → 1002,
+  payload > 64 KiB → 1009).
+- `FragmentAssembler().feed(frame)` reassembles continuation frames,
+  returns the decoded `str` when a text message completes, ignores control
+  frames (caller checks `frame.opcode` before calling `feed` to branch on
+  control vs. data), and raises `ProtocolError(1003)` for binary opcodes /
+  `ProtocolError(1007)` for invalid UTF-8 on completion.
+- `encode_frame(opcode, payload, fin, mask_key=None)` — server call sites
+  omit `mask_key` (unmasked); `encode_close(code, reason)` is a thin
+  wrapper for the close frame's 2-byte status-code payload, ready for 2.4.
+
+- [x] `Sec-WebSocket-Accept` computation — verified against the RFC 6455
+      §1.3 worked example (acceptance #1).
+- [x] Handshake request validation against a parsed `Request` (acceptance #2).
+- [x] Frame decoding: all three payload-length forms; round-trip at 0, 125,
+      126, 65535, 65536 bytes (acceptance #3).
+- [x] Frame encoding: unmasked server→client frames.
+- [x] Frame/protocol validation with distinguishable close codes (acceptance #4).
+- [x] Fragmentation reassembly with interleaved control frame (acceptance #5).
 
 ### 2.2 Connection hijacking (`src/server.py`, `src/router.py`)
 
@@ -285,7 +280,7 @@ a final pass. They are listed together here only so the coverage is auditable
 in one place. The genuinely last-to-arrive item is the end-to-end acceptance
 module, which needs 2.1–2.6 in place.
 
-- [ ] `tests/test_websocket.py`: unit tests for all of 2.1 — accept-header
+- [x] `tests/test_websocket.py`: unit tests for all of 2.1 — accept-header
       worked example, each handshake rejection case (400s + 426 with the
       version header), frame round-trips at all 5 sizes, each close-code
       error case (unmasked/oversized-control/reserved-bit/unknown-opcode/
