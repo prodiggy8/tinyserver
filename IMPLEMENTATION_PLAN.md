@@ -9,7 +9,19 @@ before §5 exists (§4 dependency note).
 
 Status: task 1 (scaffolding) done 2026-07-22 — `src/`, `tests/`, `public/`
 created, `script/test`/`script/server` in place, guard + smoke tests green.
-Next unchecked priority: §2 request parsing (`src/http_parse.py`).
+Task 2 (request parsing) done 2026-07-22 — `src/http_parse.py` implements
+request-line/header parsing, path/query split with hand-rolled
+percent-decoding, Content-Length and chunked body reading, and a
+`BufferedReader` incremental socket reader; 34 unit tests in
+`tests/test_http_parse.py` (plus `tests/conftest.py` adding `src/` to
+`sys.path` for test imports). Next unchecked priority: §3 response
+construction (`src/response.py`).
+
+Note for §4 integration: `read_request_head`/`read_body` raise
+`HttpError(status)` for parse errors and `ConnectionClosed` when the peer
+disconnects cleanly (including mid-message) — the connection layer should
+treat `ConnectionClosed` as "just close, don't respond" and `HttpError` as
+"send the status response, then close".
 
 Notes for future iterations:
 - Step 2 (AJAX comment section + SSE/long-polling) is explicitly out of scope
@@ -54,14 +66,14 @@ Notes for future iterations:
 
 ## 2. Request parsing (`src/http_parse.py` — pure functions, unit-testable without sockets)
 
-- [ ] Request-line parsing: `METHOD SP target SP HTTP-version CRLF`; malformed
+- [x] Request-line parsing: `METHOD SP target SP HTTP-version CRLF`; malformed
       → 400 error; version `HTTP/1.1`/`HTTP/1.0` accepted, others → 505;
       request line > 8 KiB → 414.
       Verify: unit tests for valid lines, missing parts, bad version, long line.
-- [ ] Header parsing: case-insensitive names, up to empty CRLF line; line
+- [x] Header parsing: case-insensitive names, up to empty CRLF line; line
       without a colon → 400; total header block > 32 KiB → 431.
       Verify: unit tests incl. case-insensitive lookup and oversized block.
-- [ ] Path handling: split off the query string (raw, left undecoded) FIRST,
+- [x] Path handling: split off the query string (raw, left undecoded) FIRST,
       then percent-decode only the path. Percent-decoding is hand-rolled
       (scan for `%`, parse two hex digits, decode resulting bytes as UTF-8
       with `errors="replace"`); `urllib.parse` is off-limits per the guard
@@ -70,18 +82,22 @@ Notes for future iterations:
       Verify: unit tests for `/a%20b?x=1&y=2` → path `/a b`, query `x=1&y=2`;
       `%2e%2e` → `..` (feeds the traversal tests in §6); invalid escapes pass
       through unchanged; a `%3F` in the path does not create a query split.
-- [ ] Content-Length body reading: read exactly N bytes; non-numeric or
+- [x] Content-Length body reading: read exactly N bytes; non-numeric or
       negative Content-Length → 400; decoded body > 1 MiB → 413.
       Verify: unit tests with exact/short/oversized bodies.
-- [ ] Chunked transfer decoding: hex chunk-size lines (incl. chunk extensions
+- [x] Chunked transfer decoding: hex chunk-size lines (incl. chunk extensions
       after `;`), chunk data, terminating `0` chunk, ignore trailers; malformed
       framing → 400; decoded total > 1 MiB → 413.
       Verify: unit tests for multi-chunk body, bad hex size, missing CRLF,
       trailers present.
-- [ ] Incremental socket reading helper: buffer-based reader that pulls header
+- [x] Incremental socket reading helper: buffer-based reader that pulls header
       block and body off a socket-like object (handles bytes split across
       recv() calls and pipelined leftover bytes).
       Verify: unit tests with a fake socket delivering data in odd-sized pieces.
+      Done: `BufferedReader` in `src/http_parse.py`, plus orchestration
+      helpers `read_request_head`/`read_body` that apply the 8 KiB/32 KiB/
+      1 MiB limits and raise `HttpError`/`ConnectionClosed` as appropriate —
+      these are what §4's connection loop will call directly.
 
 ## 3. Response construction (`src/response.py`)
 
