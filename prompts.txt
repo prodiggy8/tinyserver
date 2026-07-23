@@ -4,3 +4,21 @@ recorded once per version at the point the loop was run; the loop feeds the
 same prompt to the agent each iteration via loop.sh.
 
 ================================================================================
+
+[STEP 1 / STAGE: SPECIFY — interactive prompt to Claude Code]
+
+Build a tiny HTTP/1.1 server in Python from scratch. You're only allowed to
+use raw sockets (no libraries). It must cover: request-line/header/body
+parsing, GET and POST, keep alive and connection: close, chunked transfer
+encoding for requests, correct status codes for malformed inputs, static file
+serving with MIME types and path-traversal protection, a small routing layer,
+and a demo app (maybe a simple, black and white home page for a CS student at
+CMU). Include concrete acceptance criteria that curl based tests can verify,
+and an explicit out of scope section (no TLS, no HTTP/2).
+
+[follow-up in same session]
+
+instead of websockets can we do support for ajax? so we can build a comment
+section
+
+================================================================================
