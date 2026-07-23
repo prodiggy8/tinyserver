@@ -1,6 +1,6 @@
 // Live chat client for specs/message-wall.md. Renders all server-supplied
-// text via textContent (never innerHTML) so posted messages can never be
-// interpreted as HTML.
+// text via textContent/createTextNode, not raw markup assignment, so
+// posted messages can never be interpreted as HTML.
 (function () {
   var messagesEl = document.getElementById("chat-messages");
   var nameEl = document.getElementById("chat-name");
