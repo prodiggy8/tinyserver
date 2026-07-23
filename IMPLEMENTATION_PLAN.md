@@ -21,15 +21,39 @@ auto-fills `Content-Length`/`Date`/`Server`), a hand-rolled
 `format_http_date` (locale-independent, tested under `de_DE.UTF-8`), an
 `ok_response` helper, and error-page builders for 400/404/405/413/414/431/
 500/505 (`method_not_allowed` also sets `Allow`); 16 unit tests in
-`tests/test_response.py`. Next unchecked priority: §4 connection handling
-(`src/server.py`) — response.py's helpers are what the connection loop will
-call to turn `HttpError`/route results into bytes on the wire.
+`tests/test_response.py`.
+Task 4 (connection handling) done 2026-07-22 — `src/server.py` implements
+`HttpServer` (bind/start/serve_forever/stop, `SO_REUSEADDR`,
+thread-per-connection, `PORT` env var / `--port` flag with flag winning,
+port-0 → bound ephemeral port exposed via `.port`) and the per-connection
+loop `_handle_connection` (keep-alive per HTTP version + `Connection`
+header, 5 s idle timeout via injectable `idle_timeout` → silent close on
+`socket.timeout`, `HttpError` → status response + close per
+`CLOSING_ERROR_STATUSES` {400,413,414,431,505}, handler exceptions → 500
+with connection kept alive). Handler contract: callable taking a `Request`
+(method/path/query/headers/body/version) and returning
+`(status, headers, body)` — matches §5's eventual router shape, so the
+router can be dropped in as the `handler=` argument directly.
+`default_handler` (404 for everything) is the constructor default until
+§5/§7 wire in real routing. 10 integration tests in `tests/test_server.py`
+(raw sockets + a stub/raising handler), covering all 4 task bullets:
+concurrent slow/fast connections, keep-alive reuse + `Connection: close` +
+HTTP/1.0 default-close/keep-alive-header, shortened-timeout idle close,
+malformed-request 400 + `HTTP/2.0` 505 (both followed by EOF), and
+handler-exception 500 with connection survival. Manually verified with
+`curl -v` that keep-alive reuse ("Re-using existing connection") works
+against a live run. Next unchecked priority: §5 routing layer
+(`src/router.py`) — build a `Router` whose `dispatch(request)` matches
+`HttpServer`'s handler contract, then wire `HttpServer(handler=router.dispatch)`
+in `src/app.py`/`script/server`.
 
-Note for §4 integration: `read_request_head`/`read_body` raise
-`HttpError(status)` for parse errors and `ConnectionClosed` when the peer
-disconnects cleanly (including mid-message) — the connection layer should
-treat `ConnectionClosed` as "just close, don't respond" and `HttpError` as
-"send the status response, then close".
+Note for §5 integration: `src/server.py`'s injected handler receives a
+`Request` (method, path, query, headers, body, version — see
+`server.Request`) and must return `(status, headers, body)`; the server
+already appends the `Connection` header itself, so router/app handlers
+should NOT set one. HEAD-stripping and the static-file 404 fallback are
+entirely the router/static layer's job — `server.py` has no method- or
+path-specific logic.
 
 Notes for future iterations:
 - Step 2 (AJAX comment section + SSE/long-polling) is explicitly out of scope
@@ -144,7 +168,7 @@ a stub handler that returns a fixed 200 — they must not depend on routing,
 static files, or the demo app. The same injection point is what makes the
 idle-timeout test below practical.
 
-- [ ] Socket listener: bind `127.0.0.1:8080` by default; port from `PORT` env
+- [x] Socket listener: bind `127.0.0.1:8080` by default; port from `PORT` env
       var or `--port` flag (flag wins); `SO_REUSEADDR`; thread-per-connection
       dispatch; clean shutdown on KeyboardInterrupt. Handler callable and
       keep-alive timeout are injectable (see dependency note); expose the
@@ -152,19 +176,23 @@ idle-timeout test below practical.
       Verify: integration test starts server on an ephemeral port, two
       concurrent clients get responses (one slow handler doesn't block the
       other).
-- [ ] Keep-alive semantics: HTTP/1.1 keep-alive by default, close on
+      Done: `HttpServer` in `src/server.py`; see task-4 summary above.
+- [x] Keep-alive semantics: HTTP/1.1 keep-alive by default, close on
       `Connection: close`; HTTP/1.0 close by default, keep alive on
       `Connection: keep-alive`; multiple sequential requests served over one
       connection.
       Verify: raw-socket test sends two requests on one connection, gets two
       responses; `Connection: close` request → server closes.
-- [ ] Idle timeout: 5 s on keep-alive connections, close silently.
+      Done: `_wants_keepalive` in `src/server.py`.
+- [x] Idle timeout: 5 s on keep-alive connections, close silently.
       Verify: test with shortened timeout (make it injectable) — connection
       closes with no bytes sent after idling.
-- [ ] Error responses at the connection layer: parse errors map to
+      Done: `idle_timeout` constructor arg, applied via `sock.settimeout`.
+- [x] Error responses at the connection layer: parse errors map to
       400/413/414/431/505 responses and the connection is closed afterwards.
       Verify: raw-socket tests — `GARBAGE\r\n\r\n` → `HTTP/1.1 400`, then EOF
       (acceptance #10); `GET / HTTP/2.0` → 505 (acceptance #11).
+      Done: `_send_closing_error` in `src/server.py`.
 
 ## 5. Routing layer (`src/router.py`)
 
