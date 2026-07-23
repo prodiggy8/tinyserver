@@ -10,6 +10,7 @@
 #   -n, --max <number>           Max iterations, 0 for unlimited (default: 0)
 #   -s, --stop <string>          Completion promise - stop when this string appears in output
 #   -p, --prompt <file>          Custom prompt file (overrides mode default)
+#   -M, --model <model>          Claude model to use (default: sonnet)
 #   -h, --help                   Show this help message
 #
 # Examples:
@@ -23,6 +24,7 @@ MODE="build"
 MAX_ITERATIONS=0
 COMPLETION_PROMISE="<promise>DONE</promise>"
 PROMPT_FILE=""
+MODEL="sonnet"
 
 # Parse named arguments
 while [[ $# -gt 0 ]]; do
@@ -43,8 +45,12 @@ while [[ $# -gt 0 ]]; do
             PROMPT_FILE="$2"
             shift 2
             ;;
+        -M|--model)
+            MODEL="$2"
+            shift 2
+            ;;
         -h|--help)
-            head -n 19 "$0" | tail -n 14
+            head -n 20 "$0" | tail -n 15
             exit 0
             ;;
         *)
@@ -70,6 +76,7 @@ CURRENT_BRANCH=$(git branch --show-current)
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Mode:   $MODE"
 echo "Prompt: $PROMPT_FILE"
+echo "Model:  $MODEL"
 echo "Branch: $CURRENT_BRANCH"
 [ -n "$COMPLETION_PROMISE" ] && echo "Stop:   '$COMPLETION_PROMISE'"
 [ "$MAX_ITERATIONS" -gt 0 ] && echo "Max:    $MAX_ITERATIONS iterations"
@@ -91,7 +98,7 @@ while true; do
     PROMPT_CONTENT=$(cat "$PROMPT_FILE")
 
     # Capture output while still displaying it
-    OUTPUT=$(claude -p "$PROMPT_CONTENT" --dangerously-skip-permissions 2>&1 | tee /dev/stderr)
+    OUTPUT=$(claude -p "$PROMPT_CONTENT" --model "$MODEL" --dangerously-skip-permissions 2>&1 | tee /dev/stderr)
 
     # Push changes after each iteration (skip if no remote configured yet)
     if git remote get-url origin &>/dev/null; then
