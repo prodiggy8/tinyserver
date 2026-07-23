@@ -90,7 +90,11 @@ def ok_response(body, content_type="text/html; charset=utf-8", headers=None,
     return serialize_response(200, pairs, body, version=version)
 
 
-def _error_page(status, detail=None):
+def error_page(status, detail=None):
+    """Small HTML error page body for `status`. Public so callers that
+    return a (status, headers, body) tuple instead of full serialized
+    bytes (e.g. src/router.py's 404/405 results) can reuse the same page
+    instead of duplicating the markup."""
     reason = REASON_PHRASES.get(status, "")
     detail_html = "<p>{}</p>".format(detail) if detail else ""
     return (
@@ -103,7 +107,7 @@ def error_response(status, headers=None, detail=None, version="HTTP/1.1"):
     """Build an error response with a small HTML error page body."""
     pairs = list(headers) if headers else []
     pairs.append(("Content-Type", "text/html; charset=utf-8"))
-    body = _error_page(status, detail=detail)
+    body = error_page(status, detail=detail)
     return serialize_response(status, pairs, body, version=version)
 
 

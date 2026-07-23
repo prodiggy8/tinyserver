@@ -196,12 +196,22 @@ idle-timeout test below practical.
 
 ## 5. Routing layer (`src/router.py`)
 
-- [ ] Route registry keyed by `(method, exact path)`; handler receives request
+- [x] Route registry keyed by `(method, exact path)`; handler receives request
       object (method, path, query, headers, body) and returns
       (status, headers, body); dynamic routes take precedence over static
       files.
       Verify: unit tests registering routes and dispatching fake requests.
-- [ ] Method handling: `HEAD` dispatches to the `GET` handler and strips the
+      Done: `Router` in `src/router.py` — `add_route`/`get`/`post` register
+      into a `(METHOD, path) -> handler` dict; `dispatch(request)` matches
+      `HttpServer`'s handler contract exactly, so `HttpServer(handler=router.dispatch)`
+      wires directly. `static_handler` is an injectable
+      `callable(method, path) -> (status, headers, body) | None` (default: a
+      stub returning `None`, i.e. nothing is static) — same
+      dependency-injection pattern as §4, so this module is unit-testable
+      before `src/static.py` exists, per a fake static handler in
+      `tests/test_router.py`. Dynamic routes are checked before the static
+      fallback, giving them precedence at the same path.
+- [x] Method handling: `HEAD` dispatches to the `GET` handler and strips the
       body (headers, incl. Content-Length, identical to GET) — this must also
       apply on the static-file fallback path, since acceptance #12 is `HEAD /`
       (a static route); known method on a path that exists with other methods
@@ -212,9 +222,37 @@ idle-timeout test below practical.
       nowhere → plain 404.
       Verify: unit tests; acceptance #8 (`DELETE /api/echo` → 405,
       `Allow: POST`) and #12 (HEAD / == GET / minus body).
-- [ ] Handler exception safety: unhandled exception in a handler → 500
+      Done: `Router.dispatch` maps `HEAD` -> looks up the `GET` handler (or
+      static fallback), then strips the body via `_finish` while keeping
+      status/headers (incl. Content-Length, since `serialize_response` sees
+      the same body length the GET path would have produced) identical to
+      GET. The 405-vs-404 decision unions dynamic-route methods at that path
+      with `{"GET", "HEAD"}` when a static file exists there; `Allow` is
+      ordered via `PREFERRED_METHOD_ORDER` (GET, HEAD, POST, ...) so
+      `Allow: GET, HEAD` matches the spec's exact wording. Also handles a
+      method that IS GET/HEAD hitting a POST-only path → 405 (not 404),
+      which the spec implies but doesn't give an explicit acceptance
+      criterion for.
+- [x] Handler exception safety: unhandled exception in a handler → 500
       response, connection survives (next request on same connection works).
       Verify: integration test with a deliberately-throwing route.
+      Done: `Router.dispatch` does NOT catch handler exceptions — they
+      propagate to `src/server.py`'s connection loop, which already wraps
+      the `handler(request)` call in try/except → 500 + connection survives
+      (built in task 4). `tests/test_router.py`'s
+      `test_handler_exception_via_real_server_returns_500_and_survives` wires
+      a real `Router` into a real `HttpServer` to prove the composition
+      works end to end, not just at the server layer in isolation.
+
+Note for §6/§7 integration: `Router(static_handler=...)` expects a callable
+`(method, path) -> (status, headers, body) | None`, always called with
+`method="GET"` (existence-checked once per request, only when needed — not
+called at all for a path with an exact dynamic-route hit). `src/static.py`'s
+serving function should match that shape directly so `src/app.py` can do
+`Router(static_handler=static.serve)` with no adapter. `error_page(status,
+detail=None)` in `src/response.py` is now public (was `_error_page`) so
+`router.py`'s 404/405 bodies reuse the same small HTML template used by the
+connection-layer error responses.
 
 ## 6. Static file serving (`src/static.py`)
 
