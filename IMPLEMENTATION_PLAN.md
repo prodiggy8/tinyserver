@@ -41,6 +41,32 @@ bottom-up by dependency (pure codec first, then plumbing, then the stateful
 chat layer, then wiring, then UI, then end-to-end tests) — build in this
 order.
 
+Coverage: all 15 acceptance criteria in `specs/message-wall.md` map to a task
+below. Four spec requirements have no numbered criterion of their own — the
+close handshake and ping/pong (§3), the 128-connection cap (§6), and the
+`bad_request` error frame (§4) — so tests for them are called out explicitly
+in the sections below.
+
+**Threading model (pinned by review — read before building 2.4/2.5).** Per
+WebSocket connection there are exactly two threads plus one process-wide one:
+
+1. *Reader*: the thread that accepted the HTTP request and performed the
+   hijack. It does NOT return to the HTTP loop; it runs the frame read loop
+   until close/EOF/error, then unregisters the connection and closes the
+   socket. Nothing else may read from the socket.
+2. *Writer*: one thread per connection draining that connection's bounded
+   outbound queue. It is the ONLY thread that writes frames to the socket,
+   which is what satisfies spec §7's "frames must not interleave" — a plain
+   lock is not enough, see 2.4.
+3. *Ping scheduler*: one process-wide thread that enqueues pings onto every
+   connection's queue. It never touches a socket directly.
+
+Invariants: broadcast only enqueues, never does socket I/O; the registry lock
+is never held across socket I/O or across a queue put that could block;
+unregistering is idempotent (reader, writer, and ping scheduler can all
+decide to drop the same connection) and only the first unregister broadcasts
+the updated visitor count.
+
 ### 2.1 WebSocket handshake + frame codec (`src/websocket.py` — pure functions, unit-testable without sockets)
 
 - [ ] `Sec-WebSocket-Accept` computation (SHA-1 of key + GUID
@@ -81,15 +107,33 @@ order.
 ### 2.2 Connection hijacking (`src/server.py`, `src/router.py`)
 
 - [ ] Give the connection-loop handler a way to take over the raw socket:
-      add the socket to `Request` (or pass it alongside), and introduce a
-      sentinel result that `_handle_connection` recognizes to mean "the
-      handler already owns this socket" — skip response serialization/send
-      and return from the loop *without* closing the socket. `Router.dispatch`
-      must pass the sentinel through unchanged (bypass the HEAD/
-      Content-Length finishing in `_finish`, since there is no status/body to
-      process). Cover with a unit test: a stub handler that hijacks and
-      writes raw bytes directly, asserting the HTTP loop sends nothing extra
-      and does not close the socket out from under the handler.
+      expose the socket AND the live `BufferedReader` on `Request`
+      (`Request` is defined in `src/server.py:34`), and introduce a sentinel
+      result that `_handle_connection` recognizes to mean "the handler
+      already owns this socket" — skip response serialization/send and
+      return from the loop *without* closing the socket. `Router.dispatch`
+      must check for the sentinel BEFORE `status, headers, body =
+      route_handler(request)` unpacks the result (`src/router.py:74`) and
+      return it unchanged, bypassing `_finish`. Cover with a unit test: a
+      stub handler that hijacks and writes raw bytes directly, asserting the
+      HTTP loop sends nothing extra and does not close the socket out from
+      under the handler.
+      Review note — three things the hijack must hand over, each a real bug
+      if missed:
+      (a) *The existing reader, not a new one.* `_handle_connection` creates
+      one `BufferedReader` per connection (`src/server.py:73`) and it may
+      already hold bytes past the request (`has_buffered_data()`). A browser
+      can send its first WebSocket frame in the same segment as the
+      handshake, so constructing a fresh reader in `chat.py` would silently
+      drop that frame. Pass the same reader through.
+      (b) *Reset the socket timeout.* The loop sets
+      `sock.settimeout(idle_timeout)` (5 s, `src/server.py:76`) for HTTP
+      keep-alive. Inherited unchanged, every idle WebSocket read would raise
+      `socket.timeout` after 5 s. The chat layer must set its own timeout
+      (the pong deadline) immediately after hijacking.
+      (c) *Ownership of closing.* Once hijacked, the HTTP loop must not
+      close the socket; the chat reader thread closes it when its loop ends.
+      Assert this in the unit test.
 - [ ] Add reason phrases for `101 Switching Protocols`, `426 Upgrade
       Required`, and `503 Service Unavailable` to `response.py`'s
       `REASON_PHRASES` (needed for the handshake's success/failure paths and
@@ -122,16 +166,41 @@ order.
       lines on startup so it cannot grow unbounded. Create `data/` on
       startup if it doesn't exist (a fresh clone has no `data/` dir yet —
       add `data/.gitkeep` too).
+      Review note: add `data/*.jsonl` to `.gitignore`. Without it the store
+      gets committed, a fresh clone starts with whoever's messages were
+      pushed, and acceptance #10 (persistence across restart) passes for the
+      wrong reason.
+- [ ] Per-connection send path: a bounded outbound queue (64 messages) and a
+      dedicated writer thread that drains it and is the only thread writing
+      frames to that socket.
+      Review note: the queue needs a consumer, and the writer thread IS that
+      consumer — this was the plan's central concurrency gap. A write lock
+      alone does not satisfy spec §3's "broadcast never blocks on a single
+      socket": a slow client's `sendall` blocks while holding the lock, so
+      the broadcaster stalls on the very connection the bound was meant to
+      isolate. With a single writer thread per connection, `send()` is just
+      a non-blocking `put` and frame interleaving is impossible by
+      construction (spec §7 satisfied without a lock on the normal path).
+      A `put` onto a full queue drops that connection with close status 1008.
+      Verify: a test whose fake socket blocks on `sendall` — a broadcast to
+      two connections still reaches the healthy one promptly, and the stalled
+      one is dropped with 1008 once its queue fills.
 - [ ] Connection registry: thread-safe add/remove keyed by connection;
-      broadcast iterates a snapshot (so a disconnect mid-broadcast can't
-      corrupt iteration); each connection has its own write lock (frames
-      from concurrent broadcasts must not interleave on one socket) and a
-      bounded outbound queue (64 messages) — a full queue drops that
-      connection with close status 1008 rather than blocking the
-      broadcaster.
+      broadcast takes a snapshot under the lock, releases it, then enqueues
+      (never holds the registry lock across socket I/O or a blocking put);
+      unregister is idempotent — the reader thread, writer thread, and ping
+      scheduler may each try to drop the same connection, and only the first
+      one broadcasts the updated visitor count.
+      Verify: concurrent disconnect during a broadcast leaves the registry
+      consistent; unregistering the same connection twice broadcasts one
+      count update, not two.
 - [ ] Connection cap: refuse the handshake with `503` once 128 connections
       are registered (checked before committing to the 101 response/hijack
-      in 2.5).
+      in 2.5). The cap must be injectable so the test does not need to open
+      128 sockets.
+      Verify: with the cap set to 2, a third handshake gets `503` and normal
+      HTTP keep-alive is unaffected on that connection. (Spec §6 requirement
+      with no numbered criterion.)
 - [ ] Rate limiting: 5 messages per 10 seconds per connection; over the
       limit → `{"type":"error","reason":"rate_limited"}`, message not stored
       or broadcast, connection stays open (acceptance #11).
@@ -144,13 +213,28 @@ order.
       frames per spec §4: `{"type":"message","name":...,"text":...,
       "ts":...}` on broadcast, `{"type":"visitors","count":...}` on
       join/leave.
-- [ ] Ping/pong lifecycle: a background scheduler pings idle connections
-      every 20s; a connection with no pong (or any frame) for 60s is
-      dropped; client-initiated pings are answered with a pong carrying the
-      same payload.
+      Verify: a text frame containing invalid JSON, and one with
+      `{"type":"nonsense"}`, each get a `bad_request` error frame back and
+      the connection stays usable for a subsequent successful post. (Spec §4
+      requirement with no numbered criterion.)
+- [ ] Ping/pong lifecycle: one process-wide scheduler thread pings idle
+      connections every 20 s (by enqueuing, never writing directly); a
+      connection with no pong or other frame for 60 s is dropped;
+      client-initiated pings are answered with a pong carrying the same
+      payload.
+      Review note: the 20 s/60 s intervals MUST be injectable, exactly as
+      Step 1 made the HTTP idle timeout injectable — otherwise this is
+      untestable in pytest without a 60-second sleep.
+      Verify: with intervals shortened to ~0.05 s/0.15 s, a client that
+      never pongs is dropped, and one that does pong survives; a client ping
+      gets a pong with the same payload back. (Spec §3 requirement with no
+      numbered acceptance criterion.)
 - [ ] Close handshake: on receiving a close frame, echo a close frame then
       close the socket; on server shutdown, send close status 1001 to all
-      registered connections.
+      registered connections and join the writer threads.
+      Verify: a client sending a close frame receives one back and the
+      socket closes; `HttpServer.stop()` with a connection open delivers a
+      1001 close frame. (Spec §3 requirement with no numbered criterion.)
 - [ ] Abrupt-disconnect handling: a read that raises or returns 0 bytes
       removes the connection from the registry, closes its socket, and
       broadcasts an updated visitor count — no traceback reaches the log as
@@ -160,11 +244,19 @@ order.
 
 - [ ] Register `GET /ws`: runs 2.1's handshake validation (reading the
       `chatname` cookie per 2.3, checking 2.4's connection cap) — on success,
-      sends the 101 response directly on the socket and hijacks the
-      connection into `chat.py`'s registry, which immediately sends the
-      `welcome` frame (`name`, recent `messages`, `visitors` count); on
-      failure, returns the normal `(400/426/503, headers, body)` tuple
-      through the router so HTTP keep-alive semantics are untouched.
+      sends the 101 response directly on the socket, registers the
+      connection (starting its writer thread), sends the `welcome` frame
+      (`name`, recent `messages`, `visitors` count), then runs the frame
+      read loop on this same thread until close/EOF/error, unregisters, and
+      closes the socket. It returns the 2.2 sentinel so the HTTP loop never
+      touches the connection again. On failure it returns a normal
+      `(400/426/503, headers, body)` tuple through the router, leaving HTTP
+      keep-alive semantics untouched.
+      Review note: the read loop running on the hijacking thread is what
+      makes the connection live — the earlier wording ("hijacks into the
+      registry") left no thread reading frames, so a registered connection
+      would receive broadcasts but never process an incoming post, and the
+      socket would leak.
 - [ ] Register `GET /api/messages`: returns the same recent messages as
       JSON with `Content-Type: application/json` and
       `X-Content-Type-Options: nosniff`.
@@ -185,6 +277,13 @@ order.
       black-and-white design; load `chat.js`.
 
 ### 2.7 Tests
+
+Review note on sequencing: `PROMPT_build.md` requires `./script/test` to pass
+before any item is checked off, so the unit tests below are written WITH the
+section they cover (2.1's tests land with 2.1, 2.4's with 2.4), not saved for
+a final pass. They are listed together here only so the coverage is auditable
+in one place. The genuinely last-to-arrive item is the end-to-end acceptance
+module, which needs 2.1–2.6 in place.
 
 - [ ] `tests/test_websocket.py`: unit tests for all of 2.1 — accept-header
       worked example, each handshake rejection case (400s + 426 with the
