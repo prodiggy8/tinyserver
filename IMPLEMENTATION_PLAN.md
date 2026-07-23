@@ -121,16 +121,18 @@ Tests: `tests/test_server.py` (`test_hijack_sends_nothing_extra_and_leaves_socke
 `tests/test_router.py` (`test_dispatch_passes_hijacked_sentinel_through_without_unpacking`).
 149/149 green.
 
-### 2.3 Cookie parsing + Set-Cookie emission
+### 2.3 Cookie parsing + Set-Cookie emission: DONE
 
-- [ ] Parse the `Cookie` request header into a name→value dict (hand-rolled
-      split on `; ` / `=`, no library) — expose via a small helper reusable
-      by both the `/` route (2.5) and the `/ws` handshake (2.4/2.5).
-- [ ] Helper to build a `Set-Cookie: chatname=<name>; Path=/;
-      Max-Age=31536000; SameSite=Lax` header value.
-- [ ] Cookie validation: a `chatname` cookie value must match
-      `^[a-z]+[0-9]{2}$` and be ≤ 32 chars, else treat as absent and issue a
-      fresh name (acceptance #13).
+Implemented `src/cookies.py` (pure functions, no `http.cookies`) +
+`tests/test_cookies.py` (10 tests, all green). `parse_cookie_header(value)`
+splits on `;` then the first `=`, skipping malformed fragments rather than
+raising. `is_valid_chatname(value)` checks `^[a-z]+[0-9]{2}$` and ≤ 32 chars
+— 2.5's `/` and `/ws` handlers call this to decide "reuse cookie name" vs.
+"issue a fresh one" (acceptance #13); actual name *generation* is 2.4's job,
+this module only validates. `build_set_cookie(name, value, path="/",
+max_age=31536000, same_site="Lax")` returns the header value string ready
+to pair with `"Set-Cookie"` in a router handler's headers list. 159/159
+green.
 
 ### 2.4 Chat layer (`src/chat.py`)
 
