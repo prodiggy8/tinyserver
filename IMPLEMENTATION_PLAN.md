@@ -227,16 +227,26 @@ server run drops all chat connections with close status 1001 on Ctrl-C.
 Tests that construct `HttpServer` directly without a `shutdown_hook` are
 unaffected (default `None`, no-op).
 
-### 2.6 Chat UI (`public/`)
+### 2.6 Chat UI (`public/`): DONE
 
-- [ ] `public/chat.js`: opens the `/ws` connection, renders `welcome`/
-      `message`/`visitors`/`error` frames, sends `post` frames from a form.
-      Renders all user-supplied text via `textContent`, never `innerHTML`
-      (acceptance #14 includes a source-check for the absence of
-      `innerHTML`).
-- [ ] `public/index.html` + `style.css`: add a chat section (message list,
-      post input, live visitor count) consistent with the existing
-      black-and-white design; load `chat.js`.
+Implemented `public/chat.js`: fetches `/api/messages` immediately (history
+shows even if the WebSocket fails), then opens `/ws` and renders `welcome`
+(name + visitors + message list), `message` (appended), `visitors` (count
+update), and `error` (transient message, cleared after 4s) frames. Posts go
+out as `{"type": "post", "text": ...}` on form submit. All server-supplied
+text is rendered via `createElement`/`textContent`/`createTextNode` — no
+`innerHTML` anywhere in the file (satisfies acceptance #14's source check).
+
+`public/index.html` gained a `#chat` section (status line with name +
+visitor count, message list, post form, error line) styled in `style.css`
+consistent with the existing black-and-white design; `chat.js` is loaded at
+the end of `<body>`.
+
+Manually verified end-to-end against a running server (raw-socket Python
+client, since no browser is available in this environment): handshake →
+welcome frame (empty history on fresh store) → posted
+`<script>alert(1)</script>` → broadcast `message` frame → `GET
+/api/messages` shows it as literal text, matching acceptance #6, #14.
 
 ### 2.7 Tests
 

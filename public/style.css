@@ -34,3 +34,67 @@ footer {
     font-size: 0.85rem;
     color: #333;
 }
+
+#chat-status {
+    font-size: 0.9rem;
+    color: #333;
+}
+
+#chat-messages {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem;
+    max-height: 16rem;
+    overflow-y: auto;
+    border: 1px solid #000;
+}
+
+#chat-messages li {
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid #ccc;
+    word-wrap: break-word;
+}
+
+#chat-messages li:last-child {
+    border-bottom: none;
+}
+
+.chat-name {
+    font-weight: bold;
+}
+
+#chat-form {
+    display: flex;
+    gap: 0.5rem;
+}
+
+#chat-input {
+    flex: 1;
+    font-family: inherit;
+    font-size: 1rem;
+    padding: 0.4rem;
+    border: 1px solid #000;
+    background: #fff;
+    color: #000;
+}
+
+#chat-form button {
+    font-family: inherit;
+    font-size: 1rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #000;
+    background: #fff;
+    color: #000;
+    cursor: pointer;
+}
+
+#chat-form button:hover {
+    background: #000;
+    color: #fff;
+}
+
+#chat-error {
+    min-height: 1.2rem;
+    color: #900;
+    font-size: 0.9rem;
+}

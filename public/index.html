@@ -35,9 +35,29 @@
           I've built, including this hand-rolled HTTP/1.1 server on raw sockets.
         </p>
       </section>
+      <section id="chat">
+        <h2>Live Chat</h2>
+        <p id="chat-status">
+          Connecting… you are <strong id="chat-name">…</strong>.
+          <span id="chat-visitors">0</span> visitor(s) online.
+        </p>
+        <ul id="chat-messages"></ul>
+        <form id="chat-form">
+          <input
+            id="chat-input"
+            type="text"
+            maxlength="500"
+            autocomplete="off"
+            placeholder="Say something…"
+          />
+          <button type="submit">Post</button>
+        </form>
+        <p id="chat-error" role="alert"></p>
+      </section>
     </main>
     <footer>
       <p>&copy; 2026 Gustavo Grancieiro</p>
     </footer>
+    <script src="/chat.js"></script>
   </body>
 </html>
