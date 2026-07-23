@@ -7,8 +7,8 @@ https://github.com/gwincr11/ralph-wiggum-tutorial).
 
 - **Step 1 (base):** raw-socket HTTP/1.1 server — request parsing, keep-alive,
   static files, routing — serving a demo app.
-- **Step 2 (extension):** WebSockets implemented by hand (RFC 6455) plus a live
-  feature in the app.
+- **Step 2 (extension):** AJAX-backed comment section on the demo site, with a
+  live-update mechanism (Server-Sent Events or long-polling) built by hand.
 
 Each step goes through four stages: **specify → plan (looped) → review →
 build (looped)**, with a commit at every stage boundary.
