@@ -216,9 +216,31 @@ class ConnectionRegistry:
         with self._lock:
             return len(self._connections)
 
-    def register(self, sock, name):
+    def at_capacity(self):
+        """Cheap peek used by a caller that must decide whether to send a
+        101 or a 503 *before* calling `register` (see `register`'s
+        docstring for why the two can't be the same call). Racy by design:
+        a handshake landing in the tiny window between this check and the
+        matching `register` call can still get refused there instead."""
+        with self._lock:
+            return len(self._connections) >= self._max_connections
+
+    def register(self, sock, name, build_initial_frames=None):
         """Add a new connection and start its writer thread. Returns None
-        (refusing the connection) if the registry is at capacity."""
+        (refusing the connection) if the registry is at capacity.
+
+        Must only be called AFTER any raw bytes the caller writes directly
+        to `sock` (e.g. the 101 response) — this starts the writer thread,
+        which becomes the only thread allowed to write to `sock` from then
+        on, so writing to it first would race the writer.
+
+        `build_initial_frames(conn, count)`, if given, is called with the
+        registry lock still held (`count` already includes this
+        connection) and returns an iterable of frame bytes enqueued before
+        the connection is visible to any other thread's broadcast — this
+        is what guarantees e.g. a `welcome` frame is queued ahead of the
+        join `visitors` broadcast instead of racing it.
+        """
         with self._lock:
             if len(self._connections) >= self._max_connections:
                 return None
@@ -226,6 +248,9 @@ class ConnectionRegistry:
             self._next_id += 1
             conn = Connection(conn_id, sock, name)
             self._connections[conn_id] = conn
+            if build_initial_frames is not None:
+                for frame_bytes in build_initial_frames(conn, len(self._connections)):
+                    conn.enqueue(frame_bytes)
         conn.start_writer()
         self._broadcast_visitor_count()
         return conn
@@ -253,13 +278,13 @@ class ConnectionRegistry:
             if not conn.enqueue(frame_bytes):
                 self.drop(conn, 1008, "queue_full")
 
-    def _send_all(self, frame_bytes):
-        for conn in self.snapshot():
-            conn.enqueue(frame_bytes)
-
-    def _broadcast_visitor_count(self):
+    def _broadcast_visitor_count(self, exclude=None):
         payload = json.dumps({"type": "visitors", "count": self.count()}).encode("utf-8")
-        self._send_all(encode_frame(OPCODE_TEXT, payload))
+        frame_bytes = encode_frame(OPCODE_TEXT, payload)
+        for conn in self.snapshot():
+            if conn is exclude:
+                continue
+            conn.enqueue(frame_bytes)
 
     def drop(self, conn, code=1000, reason=b""):
         """Force-disconnect `conn`: best-effort enqueue a close frame,

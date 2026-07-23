@@ -150,12 +150,13 @@ class HttpServer:
     can use a short timeout."""
 
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, handler=_app_handler,
-                 idle_timeout=IDLE_TIMEOUT, backlog=128):
+                 idle_timeout=IDLE_TIMEOUT, backlog=128, shutdown_hook=None):
         self.host = host
         self.port = port
         self.handler = handler
         self.idle_timeout = idle_timeout
         self.backlog = backlog
+        self.shutdown_hook = shutdown_hook
         self._sock = None
         self._accept_thread = None
 
@@ -217,6 +218,8 @@ class HttpServer:
             except OSError:
                 pass
             self._sock = None
+            if self.shutdown_hook is not None:
+                self.shutdown_hook()
 
 
 def _parse_port(argv, default_port):
@@ -240,7 +243,9 @@ def main(argv=None):
     default_port = int(os.environ.get("PORT", DEFAULT_PORT))
     port = _parse_port(argv, default_port)
 
-    server = HttpServer(host=DEFAULT_HOST, port=port)
+    import app
+    server = HttpServer(host=DEFAULT_HOST, port=port, handler=app.router.dispatch,
+                         shutdown_hook=app.shutdown)
     bound_port = server.bind()
     print("Listening on http://{}:{}".format(DEFAULT_HOST, bound_port))
     server.serve_forever()

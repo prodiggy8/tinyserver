@@ -181,30 +181,51 @@ scheduler, and call `serve_connection` from the `/ws` route handler.
 `HttpServer.stop()` (`src/server.py`) doesn't yet call
 `registry.shutdown_all()` — that wiring also belongs to 2.5.
 
-### 2.5 App wiring (`src/app.py`)
+### 2.5 App wiring (`src/app.py`): DONE
 
-- [ ] Register `GET /ws`: runs 2.1's handshake validation (reading the
-      `chatname` cookie per 2.3, checking 2.4's connection cap) — on success,
-      sends the 101 response directly on the socket, registers the
-      connection (starting its writer thread), sends the `welcome` frame
-      (`name`, recent `messages`, `visitors` count), then runs the frame
-      read loop on this same thread until close/EOF/error, unregisters, and
-      closes the socket. It returns the 2.2 sentinel so the HTTP loop never
-      touches the connection again. On failure it returns a normal
-      `(400/426/503, headers, body)` tuple through the router, leaving HTTP
-      keep-alive semantics untouched.
-      Review note: the read loop running on the hijacking thread is what
-      makes the connection live — the earlier wording ("hijacks into the
-      registry") left no thread reading frames, so a registered connection
-      would receive broadcasts but never process an incoming post, and the
-      socket would leak.
-- [ ] Register `GET /api/messages`: returns the same recent messages as
-      JSON with `Content-Type: application/json` and
-      `X-Content-Type-Options: nosniff`.
-- [ ] `GET /` gains `Set-Cookie` issuance when the request has no valid
-      `chatname` cookie (2.3) — needs a dynamic route (or a thin wrapper
-      around `static.serve`) since the current `/` response comes from the
-      static-file layer, which has no cookie awareness.
+Implemented `router.get("/", index_handler)`, `router.get("/api/messages",
+messages_handler)`, `router.get("/ws", ws_handler)`. 173/173 green; manually
+verified end-to-end (welcome/self-join/other-join/message ordering, XSS
+round-trip through `/api/messages`, abrupt disconnect) with an ad-hoc raw-
+socket client before writing the real acceptance suite (2.7).
+
+Review found and fixed two race/ordering bugs not caught by the existing
+2.4 unit tests (which use a bare `ConnectionRegistry` and never send an
+actual 101 response first):
+
+- **Writer-thread-races-the-101-response.** `chat.ConnectionRegistry.register`
+  starts the connection's writer thread, which becomes the only thread
+  allowed to write to the socket. Calling `register` *before* sending the
+  raw 101 response (the originally-drafted order) lets the writer thread
+  send frame bytes onto the wire before the HTTP 101 status line — a real
+  race, worse under concurrent load (another client's broadcast could land
+  in this connection's queue in that window). Fixed by making `register`'s
+  contract explicit: caller must finish writing any raw bytes to the socket
+  first. Since the capacity check (`register`'s atomic None-return) can no
+  longer gate whether to send 101 at all, added `ConnectionRegistry.
+  at_capacity()` as an explicit pre-check (racy by design, documented on
+  the method — acceptable for a single-node demo; `register`'s atomic
+  check still catches the rare miss and the caller closes without a body).
+- **Welcome-must-be-first race.** The original plan had the caller
+  `conn.enqueue(welcome_frame(...))` *after* `register()` returned, but
+  `register()` already broadcasts the join `visitors` count to every
+  connection including the new one as soon as it's inserted — so the
+  self-join broadcast could beat the welcome frame into the queue (worse,
+  a concurrent broadcast from an unrelated connection could too). Fixed by
+  giving `register` a `build_initial_frames(conn, count)` callback invoked
+  *while the registry lock is still held* (so no other thread can see this
+  connection yet), guaranteeing anything it returns — the welcome frame —
+  is queued before any broadcast can reach this connection. `count` passed
+  to the callback already includes this connection, computed race-free
+  under the same lock as the insert.
+
+`src/server.py`'s `HttpServer` gained an injectable `shutdown_hook`
+(called once from `close()`, guarded by the same `self._sock is not None`
+check so it fires exactly once); `main()` now imports `app` eagerly and
+passes `handler=app.router.dispatch, shutdown_hook=app.shutdown` so a real
+server run drops all chat connections with close status 1001 on Ctrl-C.
+Tests that construct `HttpServer` directly without a `shutdown_hook` are
+unaffected (default `None`, no-op).
 
 ### 2.6 Chat UI (`public/`)
 
