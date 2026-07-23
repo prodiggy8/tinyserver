@@ -45,10 +45,13 @@ class Request:
         self.version = version
 
 
-def default_handler(request):
-    """Placeholder used until src/router.py + src/app.py are wired in
-    (constructor default); every request is a 404."""
-    return 404, [], b"Not Found"
+def _app_handler(request):
+    """Constructor default: the real demo app. Imported lazily so modules
+    that only need `HttpServer` (most of the test suite) don't pay for
+    importing src/app.py, and to avoid any import-order coupling between
+    the two modules."""
+    import app
+    return app.router.dispatch(request)
 
 
 def _wants_keepalive(version, headers):
@@ -128,7 +131,7 @@ class HttpServer:
     need routing/static files/the demo app, and so the idle-timeout test
     can use a short timeout."""
 
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, handler=default_handler,
+    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, handler=_app_handler,
                  idle_timeout=IDLE_TIMEOUT, backlog=128):
         self.host = host
         self.port = port

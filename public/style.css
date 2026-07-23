@@ -1,0 +1,36 @@
+body {
+    font-family: Georgia, "Times New Roman", serif;
+    max-width: 40rem;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    color: #000;
+    background: #fff;
+    line-height: 1.5;
+}
+
+header, footer {
+    text-align: center;
+}
+
+h1, h2 {
+    border-bottom: 1px solid #000;
+    padding-bottom: 0.25rem;
+}
+
+a {
+    color: #000;
+}
+
+a:hover {
+    text-decoration: none;
+}
+
+ul {
+    padding-left: 1.25rem;
+}
+
+footer {
+    margin-top: 2rem;
+    font-size: 0.85rem;
+    color: #333;
+}
