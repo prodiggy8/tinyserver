@@ -1,0 +1,6 @@
+All prompts given to the AI assistant (Claude Code) for this assignment,
+in chronological order. Looped prompts (PROMPT_plan.md / PROMPT_build.md) are
+recorded once per version at the point the loop was run; the loop feeds the
+same prompt to the agent each iteration via loop.sh.
+
+================================================================================
