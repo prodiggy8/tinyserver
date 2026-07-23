@@ -118,5 +118,4 @@ and allowed module lists). Tests may use `http.client`/`curl` as clients.
 - Authentication, cookies, sessions
 - CGI, WSGI, or any framework integration
 - Multipart form parsing
-- The AJAX comment section and any live-update mechanism (Server-Sent Events
-  or long-polling) — that is Step 2 (extension)
+- WebSockets and the live message wall — that is Step 2 (extension)

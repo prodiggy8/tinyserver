@@ -27,7 +27,7 @@ auto-fills that header when absent. Caught by
 zero-Content-Length behavior.
 
 Notes for future iterations:
-- Step 2 (AJAX comment section + SSE/long-polling) is explicitly out of scope
+- Step 2 (WebSocket message wall) is explicitly out of scope
   for Step 1 and has no spec yet — it gets its own specify stage later. Do NOT
   build it or author its spec as part of this plan.
 - Concurrency choice (spec allows either): thread-per-connection.
