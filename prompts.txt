@@ -37,3 +37,15 @@ IMPORTANT: Plan only. Do NOT implement anything. Do NOT assume functionality is 
 ULTIMATE GOAL: An HTTP/1.1 server written in Python using ONLY raw sockets (no http.server, socketserver, http.client, or any HTTP framework/library), serving a small demo web app end to end, exactly as described in `specs/*`. Consider missing elements and plan accordingly. If an element is missing from the specs, search first to confirm it doesn't exist, then if needed author the specification at specs/FILENAME.md and document the plan to implement it in @IMPLEMENTATION_PLAN.md.
 
 ================================================================================
+
+[STEP 1 / STAGE: REVIEW — interactive prompt to Claude Code]
+
+Act as a technical/code reviewer of IMPLEMENTATION_PLAN.md against
+specs/http-server.md. Check if 1) every spec requirement and acceptance
+criteria are covered by some task, 2) tasks are correctly ordered by
+dependency, 3) each task's verification is actually automatable in pytest,
+4) nothing in the plan violates the raw-sockets only rule, and 5) nothing is
+over-engineered or hacky. Fix any problems directly in IMPLEMENTATION_PLAN.md
+and summarize your findings/changes.
+
+================================================================================

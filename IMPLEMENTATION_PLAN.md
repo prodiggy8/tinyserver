@@ -1,5 +1,12 @@
 # IMPLEMENTATION_PLAN.md — Step 1: raw-socket HTTP/1.1 server + demo app
 
+Reviewed 2026-07-22 against `specs/http-server.md` (review stage). Coverage
+check: all spec sections §1–6 and all 13 acceptance criteria map to at least
+one task below. Review changes: pinned hand-rolled percent-decoding and banned
+all `urllib.*` in the guard test (§1); pinned locale-independent `Date`
+construction (§3); made the request handler injectable so §4 can be tested
+before §5 exists (§4 dependency note).
+
 Status: greenfield. Re-verified 2026-07-22 (later pass) by full file listing:
 still **no** `src/`, `tests/`, or `public/` directory and no Python files
 anywhere; an **empty** `script/` directory now exists (harmless — task 1 fills
@@ -25,11 +32,15 @@ Notes for future iterations:
       Verify: `./script/test` exits 0; `./script/test` exits nonzero when a
       failing test is present.
 - [ ] Add a guard test that scans `src/*.py` imports and fails if any
-      forbidden module (http, http.server, http.client, socketserver,
-      urllib.request, wsgiref) is imported; also fail on the substring
-      `asyncio.start_server` anywhere in src (PROMPT_build.md forbids
-      high-level asyncio HTTP/server helpers even though `selectors` is fine).
-      Verify: test passes on clean src; fails if `import http` is added.
+      forbidden module is imported: http, http.server, http.client,
+      socketserver, wsgiref, and **any** `urllib.*` (not just
+      `urllib.request` — `urllib.parse.unquote`/`quote` would hand us
+      percent-decoding, which the spec expects us to implement); also fail on
+      the substring `asyncio.start_server` anywhere in src (PROMPT_build.md
+      forbids high-level asyncio HTTP/server helpers even though `selectors`
+      is fine).
+      Verify: test passes on clean src; fails if `import http` or
+      `from urllib.parse import unquote` is added.
 
 ## 2. Request parsing (`src/http_parse.py` — pure functions, unit-testable without sockets)
 
@@ -40,9 +51,15 @@ Notes for future iterations:
 - [ ] Header parsing: case-insensitive names, up to empty CRLF line; line
       without a colon → 400; total header block > 32 KiB → 431.
       Verify: unit tests incl. case-insensitive lookup and oversized block.
-- [ ] Path handling: percent-decode the request path; split off and expose the
-      query string (raw).
-      Verify: unit tests for `/a%20b?x=1&y=2` → path `/a b`, query `x=1&y=2`.
+- [ ] Path handling: split off the query string (raw, left undecoded) FIRST,
+      then percent-decode only the path. Percent-decoding is hand-rolled
+      (scan for `%`, parse two hex digits, decode resulting bytes as UTF-8
+      with `errors="replace"`); `urllib.parse` is off-limits per the guard
+      test. Invalid escapes (`%zz`, truncated `%4`) are left literal rather
+      than raising.
+      Verify: unit tests for `/a%20b?x=1&y=2` → path `/a b`, query `x=1&y=2`;
+      `%2e%2e` → `..` (feeds the traversal tests in §6); invalid escapes pass
+      through unchanged; a `%3F` in the path does not create a query split.
 - [ ] Content-Length body reading: read exactly N bytes; non-numeric or
       negative Content-Length → 400; decoded body > 1 MiB → 413.
       Verify: unit tests with exact/short/oversized bodies.
@@ -59,17 +76,33 @@ Notes for future iterations:
 ## 3. Response construction (`src/response.py`)
 
 - [ ] Response serialization: status line, headers, CRLF endings, body bytes;
-      always sets `Content-Length`, `Date` (RFC 7231 IMF-fixdate, computed
-      without HTTP libs — `time`/`email.utils` ok), and `Server` headers;
-      helpers for common statuses (200, 400, 404, 405, 413, 414, 431, 500,
-      505) with a small HTML error page body for errors.
-      Verify: unit tests parse serialized bytes and check exact framing.
+      always sets `Content-Length`, `Date`, and `Server` headers; helpers for
+      common statuses (200, 400, 404, 405, 413, 414, 431, 500, 505) with a
+      small HTML error page body for errors. `Date` is RFC 7231 IMF-fixdate
+      built by hand from `time.gmtime()` with hardcoded English day/month
+      name arrays — do NOT use `strftime("%a, %d %b %Y")` (locale-dependent:
+      a non-English locale silently emits an invalid HTTP date) and do NOT
+      use `email.utils.formatdate` (keeps provenance obvious, consistent with
+      the hand-rolled MIME table in §6).
+      Verify: unit tests parse serialized bytes and check exact framing; a
+      `Date` test asserts the RFC 7231 shape (e.g. regex
+      `^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$`)
+      and passes under a non-English locale.
 
 ## 4. Connection handling (`src/server.py`)
 
+Dependency note: §4 is built and tested BEFORE the router (§5) exists, so the
+server must take its request handler as an injectable callable (constructor
+argument, defaulting to the real app wiring once §5/§7 land). All §4 tests use
+a stub handler that returns a fixed 200 — they must not depend on routing,
+static files, or the demo app. The same injection point is what makes the
+idle-timeout test below practical.
+
 - [ ] Socket listener: bind `127.0.0.1:8080` by default; port from `PORT` env
       var or `--port` flag (flag wins); `SO_REUSEADDR`; thread-per-connection
-      dispatch; clean shutdown on KeyboardInterrupt.
+      dispatch; clean shutdown on KeyboardInterrupt. Handler callable and
+      keep-alive timeout are injectable (see dependency note); expose the
+      bound port when binding to port 0 so tests can use ephemeral ports.
       Verify: integration test starts server on an ephemeral port, two
       concurrent clients get responses (one slow handler doesn't block the
       other).
